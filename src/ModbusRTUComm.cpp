@@ -31,7 +31,7 @@ void ModbusRTUComm::begin(unsigned long baud, uint32_t config) {
     _frameTimeout = (bitsPerChar * 1000000) / baud + 1750;
   }
   _bytePeriod = (bitsPerChar * 1000000) / baud;
-  _bitPeriod = 1000000 / baud;
+  _postDelay = ((bitsPerChar * 1000000) + 1500000) / baud;
   if (_dePin >= 0) {
     pinMode(_dePin, OUTPUT);
     digitalWrite(_dePin, LOW);
@@ -101,7 +101,7 @@ bool ModbusRTUComm::writeAdu(ModbusADU& adu) {
         _serial.flush();
         i++;
       }
-      if (i == len && microsNow - txStartMicros >= _bytePeriod + _bitPeriod) {
+      if (i == len && microsNow - txStartMicros >= _postDelay) {
         if (_dePin >= 0) digitalWrite(_dePin, LOW);
         transmitting = false;
       }

@@ -26,7 +26,7 @@ class ModbusRTUComm {
     unsigned long _charTimeout;
     unsigned long _frameTimeout;
     unsigned long _bytePeriod;
-    unsigned long _bitPeriod;
+    unsigned long _postDelay;
     unsigned long _readTimeout = 0;
 
 };

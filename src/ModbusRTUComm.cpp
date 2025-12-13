@@ -1,6 +1,6 @@
 #include "ModbusRTUComm.h"
 
-ModbusRTUComm::ModbusRTUComm(Stream& serial, int8_t dePin, int8_t rePin) : _serial(serial) {
+ModbusRTUComm::ModbusRTUComm(Stream& serial, int dePin, int rePin) : _serial(serial) {
   _dePin = dePin;
   _rePin = rePin;
 }

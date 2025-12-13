@@ -13,7 +13,7 @@ enum ModbusRTUCommError : uint8_t {
 
 class ModbusRTUComm {
   public:
-    ModbusRTUComm(Stream& serial, int8_t dePin = -1, int8_t rePin = -1);
+    ModbusRTUComm(Stream& serial, int dePin = -1, int rePin = -1);
     void begin(unsigned long baud, uint32_t config = SERIAL_8N1);
     void setTimeout(unsigned long timeout);
     ModbusRTUCommError readAdu(ModbusADU& adu);
@@ -21,8 +21,8 @@ class ModbusRTUComm {
 
   private:
     Stream& _serial;
-    int8_t _dePin;
-    int8_t _rePin;
+    int _dePin;
+    int _rePin;
     unsigned long _charTimeout;
     unsigned long _frameTimeout;
     unsigned long _bytePeriod;

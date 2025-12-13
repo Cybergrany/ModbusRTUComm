@@ -52,15 +52,15 @@ A read enable pin can also be specified. This pin will be set `LOW`, always enab
 
 ### Parameters
 - `serial`: the `Stream` object to use for Modbus communication. Usually something like `Serial1`.
-- `dePin`: the driver enable pin. This pin is set `HIGH` when transmitting. If this parameter is set to `-1`, this feature will be disabled. The default value is `-1`. Allowed data types are `int8_t` or `char`.
-- `rePin`: the read enable pin. This pin is always set `LOW`. If this parameter is set to `-1`, this feature will be disabled. The default value is `-1`. Allowed data types are `int8_t` or `char`.
+- `dePin`: the driver enable pin. This pin is set `HIGH` when transmitting. If this parameter is set to `-1`, this feature will be disabled. The default value is `-1`. Allowed data types: `int`.
+- `rePin`: the read enable pin. This pin is always set `LOW`. If this parameter is set to `-1`, this feature will be disabled. The default value is `-1`. Allowed data types: `int`.
 
 ### Example
 ```C++
 #include <ModbusRTUComm.h>
 
-const int8_t dePin = A6;
-const int8_t rePin = A5;
+const int dePin = A6;
+const int rePin = A5;
 
 ModbusRTUComm rtuComm(Serial1, dePin, rePin);
 ```

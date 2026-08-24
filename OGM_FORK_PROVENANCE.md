@@ -31,6 +31,15 @@ point. Their SHA-256 values match exactly:
 The machine-readable form of these anchors and the package dependency pin is
 [`ogm-fork-lock.json`](ogm-fork-lock.json).
 
+## Current compatibility status
+
+The initial `ogm/compat` seed adds provenance and package metadata only. Its
+transport source files remain identical to the historical CMB27 branch point,
+and `ogm_functional_replay` in `ogm-fork-lock.json` remains `not_started` until
+the first reviewed source replay lands. A successful seed compile demonstrates
+that the historical package can still be resolved; it does not demonstrate
+that current OGM consumers can switch to it without a behavior delta.
+
 ## Remote layout
 
 ```text
@@ -38,13 +47,19 @@ origin    git@github.com:Cybergrany/ModbusRTUComm.git
 upstream  https://github.com/CMB27/ModbusRTUComm.git
 ```
 
-The Cybergrany repository must be created as a GitHub fork of CMB27 before the
-local compatibility branch can be pushed. Once it exists:
+The Cybergrany repository is maintained as a GitHub fork of CMB27. Refresh the
+upstream tracking line and publish compatibility work without rewriting either
+history:
 
 ```bash
 git fetch upstream --prune --tags
+git push origin upstream/main:main
 git push -u origin ogm/compat
 ```
+
+The `upstream/main:main` push must be fast-forward-only in practice. If Git
+rejects it, inspect the fork divergence; do not force-push either long-lived
+line.
 
 ## Replay and release policy
 
@@ -58,6 +73,29 @@ git push -u origin ogm/compat
    `ogm/compat` by a moving branch name.
 5. Reconcile newer CMB27 changes only in a separate, explicitly test-gated
    change after the compatibility package is proven.
+
+## Compatibility release gates
+
+A commit or tag on `ogm/compat` is suitable for an OGM consumer only after all
+of the following evidence is recorded against the exact dependency tuple:
+
+1. Source provenance: each replay commit names its source OGM commit(s), and
+   package locks resolve to immutable dependency commits.
+2. Frame parity: transmitted bytes, CRCs, receive boundaries, buffer cleanup,
+   local echo and timeout/frame/CRC errors match frozen OGM fixtures.
+3. Ordering and timing parity: serial write, drain, delays, DE/RE transitions,
+   locks and no-response completion occur in the established order.
+4. Resource/performance parity: paired timing gates pass and embedded
+   stack/RAM/flash changes are understood and accepted.
+5. Consumer validation: native suites and exact supported OGM master, bridge
+   and legacy-slave firmware builds pass from clean dependency caches.
+6. Hardware validation: the release candidate is exercised over the physical
+   GIGA/RS485 topology with unchanged deployed slave firmware.
+
+Passing items 1-5 supports a hardware checkpoint because the migration should
+not alter on-wire behavior; it does not replace item 6. Hardware that merely
+appears playable likewise does not replace the trace, ordering or performance
+gates.
 
 The seed manifest pins ModbusADU to
 `7cb0e24f0abe86bc83e114325d75fe7a7d878562`, whose implementation is the one

@@ -1,0 +1,45 @@
+{
+  "$schema": "https://raw.githubusercontent.com/platformio/platformio-core/develop/platformio/assets/schema/library.json",
+  "name": "ModbusRTUComm",
+  "version": "1.2.0",
+  "description": "Core functions for implementing Modbus RTU communication.",
+  "keywords": [
+    "arduino",
+    "modbus",
+    "modbus-rtu",
+    "serial"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Cybergrany/ModbusRTUComm.git"
+  },
+  "authors": [
+    {
+      "name": "C. M. Bulliner"
+    },
+    {
+      "name": "OpenGameMaster contributors",
+      "maintainer": true
+    }
+  ],
+  "license": "MIT",
+  "frameworks": "arduino",
+  "platforms": "*",
+  "headers": [
+    "ModbusRTUComm.h"
+  ],
+  "dependencies": {
+    "ModbusADU": "https://github.com/CMB27/ModbusADU.git#7cb0e24f0abe86bc83e114325d75fe7a7d878562"
+  },
+  "export": {
+    "exclude": [
+      ".git",
+      ".github",
+      ".pio"
+    ]
+  },
+  "build": {
+    "includeDir": "src",
+    "srcDir": "src"
+  }
+}

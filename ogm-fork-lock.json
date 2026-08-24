@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "repository": "ModbusRTUComm",
+  "compatibility_branch": "ogm/compat",
+  "upstream": {
+    "url": "https://github.com/CMB27/ModbusRTUComm.git",
+    "reviewed_head": "d71a38ea572570e3877fe21cf29313f7312bc772",
+    "compatibility_branch_point": "fb24ae3782ef8da6ad8f38f9f9eff9956edb23fc"
+  },
+  "ogm_import": {
+    "repository": "OpenGameMaster_pio",
+    "commit": "ef4d0ccb1cccd60781f3605d444a16dc7900661c",
+    "files": {
+      "src/ModbusRTUComm.h": "e78548cc7ffa72dfab5f82335540656647e7135acb80b7d809b80790bd41dbbd",
+      "src/ModbusRTUComm.cpp": "bc5049d415727da1c4d51b6850423a317824e585b83a3cc51f4f47b4efe64bcd"
+    }
+  },
+  "dependencies": {
+    "ModbusADU": {
+      "url": "https://github.com/CMB27/ModbusADU.git",
+      "commit": "7cb0e24f0abe86bc83e114325d75fe7a7d878562"
+    }
+  },
+  "ogm_functional_replay": "not_started"
+}

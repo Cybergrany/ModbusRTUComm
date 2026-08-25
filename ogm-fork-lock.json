@@ -21,5 +21,33 @@
       "commit": "7cb0e24f0abe86bc83e114325d75fe7a7d878562"
     }
   },
-  "ogm_functional_replay": "not_started"
+  "ogm_functional_replay": {
+    "status": "software_candidate_consumer_gate_pending",
+    "source": {
+      "repository": "OGM_Portable",
+      "commit": "2055adb449c1e767217f09f99efda32e52a0306d",
+      "files": {
+        "include/IO/comms/MasterComms/ModbusRTUComm.h": "8351f696024800071fad5e8346c670e7a97626567a2bfa984f7f2dafffe99273",
+        "include/IO/comms/MasterComms/ModbusRTUComm.cpp": "cdcaf65dee84e0dea30442e70fca26bcc75b298d1e274d7aa10b67e282226c0d",
+        "include/IO/comms/ModbusRTUPlatform.h": "0149753b168d5f2146c9f1630476585c05f308c3e9d99580407b0d7c0b08dcde",
+        "include/IO/comms/ModbusRTUPlatformBinding.h": "172287633b9fbe97081108df92e03076a42d34512779ab162cc2092c4600d269",
+        "include/platform/arduino/ArduinoModbusRTUPlatform.h": "2b6ee67d29f8ef6a82da0ab0aa2ead62e7e3b739644c64f99b4005f7f65c4ded",
+        "include/platform/giga/GigaBufferedSerial.h": "aa7685cbadef884320ef11d72b4ab393c8daf90bbb0c76deaa1f556b5ee1753a",
+        "include/platform/giga/GigaSerialFormat.h": "6946560f10a4b8559ae765b1dbc88c1a01ad7a5ae21d7432871b1e373dc4aef0"
+      }
+    },
+    "replay_commits": {
+      "platform_boundary": "2e5e6971ed41e65860676a3532b5f4f7b5781994",
+      "transport_state_machine": "ab792d140609e50e4778f664ab87895ccffc4abb"
+    },
+    "software_gates": {
+      "native_trace_on": "34_passed",
+      "native_trace_off": "30_passed",
+      "native_cxx11": "30_passed",
+      "arduino_giga_mbed_compile": "passed",
+      "arduino_nano_avr_compile": "passed_compile_only_ram_exceeds_target",
+      "paired_consumer_build_and_resource_diff": "pending",
+      "physical_rs485": "pending"
+    }
+  }
 }

@@ -33,12 +33,50 @@ The machine-readable form of these anchors and the package dependency pin is
 
 ## Current compatibility status
 
-The initial `ogm/compat` seed adds provenance and package metadata only. Its
-transport source files remain identical to the historical CMB27 branch point,
-and `ogm_functional_replay` in `ogm-fork-lock.json` remains `not_started` until
-the first reviewed source replay lands. A successful seed compile demonstrates
-that the historical package can still be resolved; it does not demonstrate
-that current OGM consumers can switch to it without a behavior delta.
+The current replay candidate moves the platform boundary and complete transport
+state machine from immutable OGM_Portable commit
+`2055adb449c1e767217f09f99efda32e52a0306d` into this fork. It contains no OGM
+pin, board, game, child, or topology dependency. The package boundary changes
+only include paths, neutral capability macros, diagnostics-policy naming, and a
+GIGA serial-format namespace; transport control flow remains the source anchor.
+
+| Replay theme | Fork commit | Source anchor/themes |
+| --- | --- | --- |
+| Static platform facade and Arduino/mbed backend | `2e5e6971ed41e65860676a3532b5f4f7b5781994` | `2055adb`; principally `2cb91ce`, `c95cdf5`, `cfbd946`, `e0cd769`, `59403e1` |
+| RTU RX/TX state machine and characterization suite | `ab792d140609e50e4778f664ab87895ccffc4abb` | `2055adb`; snapshot `a3551eab` plus reviewed fixes through `0bb8ed6` |
+
+The raw OGM source files at that anchor were captured before package-only
+adjustments:
+
+| OGM source | SHA-256 |
+| --- | --- |
+| `include/IO/comms/MasterComms/ModbusRTUComm.h` | `8351f696024800071fad5e8346c670e7a97626567a2bfa984f7f2dafffe99273` |
+| `include/IO/comms/MasterComms/ModbusRTUComm.cpp` | `cdcaf65dee84e0dea30442e70fca26bcc75b298d1e274d7aa10b67e282226c0d` |
+| `include/IO/comms/ModbusRTUPlatform.h` | `0149753b168d5f2146c9f1630476585c05f308c3e9d99580407b0d7c0b08dcde` |
+| `include/platform/arduino/ArduinoModbusRTUPlatform.h` | `2b6ee67d29f8ef6a82da0ab0aa2ead62e7e3b739644c64f99b4005f7f65c4ded` |
+
+This is a software candidate, not a compatibility release. Native and
+toolchain gates are recorded below, but the paired Master consumer build and
+physical GIGA/RS485 checkpoint remain pending.
+
+## Candidate software evidence
+
+- Trace-enabled native characterization: `34/34` passed.
+- Trace-compiled-out characterization: `30/30` passed.
+- Exact C++11, pedantic warnings-as-errors characterization: `30/30` passed.
+- Arduino GIGA/mbed compile with RX event task enabled: passed.
+- Arduino Nano/AVR compile: passed; the deliberately complete example consumes
+  `3107/2048` bytes of Nano RAM and is therefore a compile gate, not a deployable
+  Nano footprint claim.
+- Deterministic fixtures lock exact FC03/FC69 bytes and CRCs, current
+  no-local-echo behavior, T1.5/T3.5 edges, maximum-frame timing, terminal error
+  precedence, ADU cleanup, no-response gates, micros rollover, RX state order,
+  DE/write/drain/delay order, partial-write cleanup, event publication/wake
+  order, and a single-frame-wait TX operation budget.
+
+The GIGA example reports `100688` bytes flash and `51168` bytes RAM, but this is
+only a standalone compile. Paired whole-firmware map/resource comparison must
+use the exact Master dependency tuple before advancing to hardware.
 
 ## Remote layout
 
@@ -97,6 +135,6 @@ not alter on-wire behavior; it does not replace item 6. Hardware that merely
 appears playable likewise does not replace the trace, ordering or performance
 gates.
 
-The seed manifest pins ModbusADU to
+The compatibility manifest pins ModbusADU to
 `7cb0e24f0abe86bc83e114325d75fe7a7d878562`, whose implementation is the one
 originally imported by OGM and remains the reviewed upstream revision.

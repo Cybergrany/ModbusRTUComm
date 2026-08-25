@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/platformio/platformio-core/develop/platformio/assets/schema/library.json",
   "name": "ModbusRTUComm",
   "version": "1.2.0",
-  "description": "Core functions for implementing Modbus RTU communication.",
+  "description": "Modbus RTU framing, timing, recovery, stream ingress and RS485 direction handling for the OGM compatibility line.",
   "keywords": [
     "arduino",
     "modbus",

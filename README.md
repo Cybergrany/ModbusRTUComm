@@ -33,7 +33,9 @@ Exact branch points, source hashes, replay commits, and gate status are in
 - T1.5/T3.5 timing and response-start, maximum-frame, late-grace, and drain
   boundaries;
 - exact ADU transmission after CRC update;
-- DE-high, stream write, TX drain, post-delay, and DE-low ordering;
+- receive-safe DE/RE initialization, followed by DE-high, stream write, TX
+  drain, post-delay, and DE-low ordering for each transmission (RE is not
+  toggled per frame);
 - continuous RX ingress, frame extraction, CRC/frame/timeout classification,
   duplicate/stray/late recovery, and output-buffer cleanup;
 - no-response/broadcast turnaround gates; and
@@ -46,7 +48,8 @@ any board/game/topology concepts.
 ## Basic use
 
 Configure the UART before the transport. Negative direction pins mean that the
-pin is not supplied.
+pin is not supplied. `begin()` configures supplied DE and RE pins as outputs and
+drives both low; only DE transitions around later writes.
 
 ```cpp
 #include <Arduino.h>
@@ -71,7 +74,7 @@ ModbusRTUCommError transact(ModbusADU& requestAndResponse) {
 ```
 
 `writeAdu()` updates the CRC and returns false for a partial write, failed drain,
-or failed pre-TX cleanup. The validated transport does not require a
+or failed pre-TX cleanup. The replayed transport does not require a
 transceiver-local echo. `readAdu()` uses the unit/function already present in
 the ADU as its expected response identity, clears the output length before
 reading, and returns one of:
@@ -98,6 +101,11 @@ The capability macros `MBUS_RTU_COMM_COMPAT_API_VERSION` and
 `MBUS_RTU_COMM_HAS_ONE_SHOT_GAPS` let a higher-level fork remain buildable
 against the historical seed while selecting these APIs only when available.
 
+`MBUS_RTU_COMM_HAS_NO_RESPONSE_GATE=1` separately asserts that unit-zero
+standard writes and FC69 complete without `readAdu()` while retaining their
+next-TX turnaround boundary. Higher-level compatibility forks should require
+this capability rather than infer it from the one-shot-gap API.
+
 ## Platform binding
 
 The default backend is
@@ -117,11 +125,17 @@ build_flags =
 Selection is compile-time only. The facade adds no virtual dispatch, function
 table, stored platform pointer, or per-call type erasure.
 
+This package now owns the global `GigaBufferedSerial` compatibility type and
+uses relative internal includes so an application include path cannot replace
+it. During consumer cutover, OGM_Portable must relinquish/exclude its old copy;
+compiling both definitions in one firmware image is an ODR violation.
+
 ## Optional diagnostics and metrics
 
 - Set `MBUS_RTU_ALLOW_DIRECT_SERIAL_DIAGNOSTICS=0` when the default console
   carries framed traffic. A custom policy can instead be selected with
-  `MBUS_RTU_DIAGNOSTICS_POLICY_HEADER`.
+  `MBUS_RTU_DIAGNOSTICS_POLICY_HEADER`. This must be a whole-build flag: defining
+  it only in a sketch does not configure the separately compiled library TU.
 - Set `MBUS_DETAILED_METRICS=1` for `DebugInfo` and `debugInfo()`. The header
   then defines `MBUS_RTU_COMM_HAS_DEBUG_INFO=1`.
 - Set `MBUS_RTU_PLATFORM_TRACE=1` only for characterization. Trace adds clock
@@ -141,12 +155,16 @@ Run the deterministic native variants:
 PLATFORMIO_CORE_DIR=/home/dave/.platformio_core_portable pio test -e native_trace_on
 PLATFORMIO_CORE_DIR=/home/dave/.platformio_core_portable pio test -e native_trace_off
 PLATFORMIO_CORE_DIR=/home/dave/.platformio_core_portable pio test -e native_cxx11
+PLATFORMIO_CORE_DIR=/home/dave/.platformio_core_portable pio test -e native_failure_backend
+PLATFORMIO_CORE_DIR=/home/dave/.platformio_core_portable pio test -e production_profile
 ```
 
 The suite freezes exact FC03/FC69 bytes and CRCs, no-local-echo behavior,
 T1.5/T3.5 edges, maximum response duration, state/error precedence, buffer
-cleanup, no-response gates, wraparound, DE/write/drain/delay order, task/wake
-order, trace-on/off behavior, and a deterministic hot-path operation budget.
+cleanup, one-shot-gap consumption, no-response gates, ring overflow/wrap/drop,
+receive-safe RE initialization, DE/write/drain/delay order (including drain
+failure), task/wake order, trace-on/off behavior, a production separate-TU ABI
+profile, and a deterministic hot-path operation budget.
 See [`test/README.md`](test/README.md).
 
 An embedded release candidate must additionally compile the included
@@ -164,5 +182,8 @@ lib_deps =
   https://github.com/Cybergrany/ModbusRTUComm.git#<validated-tag-or-40-char-commit>
 ```
 
-`library.json` pins the reviewed ModbusADU dependency. Do not independently
-override that pair without repeating the compatibility gates.
+The prerelease package version is `1.2.0-ogm.1`; it is not a hardware-validated
+release or tag. `library.json` pins the reviewed ModbusADU Git commit.
+`library.properties` intentionally makes no mutable version-range dependency
+claim because that format cannot express the required commit. Do not override
+the dependency pair without repeating the compatibility gates.

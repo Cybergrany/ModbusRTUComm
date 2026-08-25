@@ -835,6 +835,211 @@ void test_partial_tx_still_drains_delays_and_restores_driver_low() {
       19U);
 }
 
+void test_begin_initializes_de_and_re_receive_safe_but_tx_toggles_only_de() {
+  resetTestClock();
+  ScriptedStream serial;
+  const int8_t dePin = 11;
+  const int8_t rePin = 12;
+  ModbusRTUComm comm(serial, dePin, rePin);
+  comm.begin(250000, SERIAL_8N1);
+
+  const std::vector<arduino_test::IoEvent>& beginEvents =
+      arduino_test::io_events();
+  TEST_ASSERT_EQUAL_UINT32(4U, beginEvents.size());
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(arduino_test::IoOperation::PinMode),
+      static_cast<uint8_t>(beginEvents[0].operation));
+  TEST_ASSERT_EQUAL_INT8(dePin, beginEvents[0].arg0);
+  TEST_ASSERT_EQUAL_INT(OUTPUT, beginEvents[0].arg1);
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(arduino_test::IoOperation::DigitalWrite),
+      static_cast<uint8_t>(beginEvents[1].operation));
+  TEST_ASSERT_EQUAL_INT8(dePin, beginEvents[1].arg0);
+  TEST_ASSERT_EQUAL_INT(LOW, beginEvents[1].arg1);
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(arduino_test::IoOperation::PinMode),
+      static_cast<uint8_t>(beginEvents[2].operation));
+  TEST_ASSERT_EQUAL_INT8(rePin, beginEvents[2].arg0);
+  TEST_ASSERT_EQUAL_INT(OUTPUT, beginEvents[2].arg1);
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(arduino_test::IoOperation::DigitalWrite),
+      static_cast<uint8_t>(beginEvents[3].operation));
+  TEST_ASSERT_EQUAL_INT8(rePin, beginEvents[3].arg0);
+  TEST_ASSERT_EQUAL_INT(LOW, beginEvents[3].arg1);
+
+  serial.clear();
+  arduino_test::clear_io_events();
+  ModbusADU request;
+  setReadReq(request, 0x11, 0x03, 0, 1);
+  TEST_ASSERT_TRUE(comm.writeAdu(request));
+
+  uint32_t deTransitions = 0;
+  uint32_t reTransitions = 0;
+  for (const arduino_test::IoEvent& event : arduino_test::io_events()) {
+    if (event.operation != arduino_test::IoOperation::DigitalWrite) {
+      continue;
+    }
+    if (event.arg0 == dePin) {
+      ++deTransitions;
+    } else if (event.arg0 == rePin) {
+      ++reTransitions;
+    }
+  }
+  TEST_ASSERT_EQUAL_UINT32(2U, deTransitions);
+  TEST_ASSERT_EQUAL_UINT32(0U, reTransitions);
+}
+
+void test_one_shot_pre_gap_zero_maximum_and_consumption_are_stable() {
+  resetTestClock();
+  ScriptedStream serial;
+  ModbusRTUComm comm(serial);
+  comm.begin(250000, SERIAL_8N1);
+
+  // Isolate the one-shot API from begin()'s initial clean-line holdoff.
+  comm._nextTxEarliest = arduino_test::now_us();
+  const uint32_t zeroBaseline = comm._nextTxEarliest;
+  comm.setPreTxGapUsOnce(0U);
+  TEST_ASSERT_EQUAL_UINT32(zeroBaseline, comm._nextTxEarliest);
+
+  comm.setPreTxGapUsOnce(4000U);
+  const uint32_t firstGate = comm._nextTxEarliest;
+  comm.setPreTxGapUsOnce(1000U);
+  TEST_ASSERT_EQUAL_UINT32(firstGate, comm._nextTxEarliest);
+  comm.setPreTxGapUsOnce(7000U);
+  const uint32_t maximumGate = comm._nextTxEarliest;
+  TEST_ASSERT_TRUE(static_cast<int32_t>(maximumGate - firstGate) > 0);
+
+  ModbusADU first;
+  setReadReq(first, 0x11, 0x03, 0, 1);
+  TEST_ASSERT_TRUE(comm.writeAdu(first));
+  TEST_ASSERT_TRUE(static_cast<int32_t>(
+      comm.debugInfo().last_tx_start_us - maximumGate) >= 0);
+
+  // writeAdu() replaces the consumed pre-gap with the normal next-frame gate.
+  const uint32_t afterFirst = arduino_test::now_us();
+  const uint32_t firstScheduledGap = comm._nextTxEarliest - afterFirst;
+  TEST_ASSERT_LESS_OR_EQUAL_UINT32(comm._frameTimeout + 64U,
+                                  firstScheduledGap);
+
+  arduino_test::advance_us(firstScheduledGap + 16U);
+  ModbusADU second;
+  setReadReq(second, 0x12, 0x03, 0, 1);
+  TEST_ASSERT_TRUE(comm.writeAdu(second));
+  const uint32_t secondScheduledGap =
+      comm._nextTxEarliest - arduino_test::now_us();
+  TEST_ASSERT_LESS_OR_EQUAL_UINT32(comm._frameTimeout + 64U,
+                                  secondScheduledGap);
+}
+
+void test_one_shot_post_gap_uses_maximum_and_is_consumed_after_success() {
+  resetTestClock();
+  ScriptedStream serial;
+  ModbusRTUComm comm(serial);
+  comm.begin(250000, SERIAL_8N1);
+
+  comm.setPostTxGapUsOnce(0U);
+  TEST_ASSERT_EQUAL_UINT32(0U, comm._oneShotPostGapUs);
+  comm.setPostTxGapUsOnce(3000U);
+  comm.setPostTxGapUsOnce(1000U);
+  comm.setPostTxGapUsOnce(5000U);
+  TEST_ASSERT_EQUAL_UINT32(5000U, comm._oneShotPostGapUs);
+
+  ModbusADU first;
+  setReadReq(first, 0x11, 0x03, 0, 1);
+  TEST_ASSERT_TRUE(comm.writeAdu(first));
+  TEST_ASSERT_EQUAL_UINT32(0U, comm._oneShotPostGapUs);
+  const uint32_t postGap = comm._nextTxEarliest - arduino_test::now_us();
+  TEST_ASSERT_GREATER_OR_EQUAL_UINT32(comm._frameTimeout + 5000U - 64U,
+                                     postGap);
+
+  arduino_test::advance_us(postGap + 16U);
+  ModbusADU second;
+  setReadReq(second, 0x12, 0x03, 0, 1);
+  TEST_ASSERT_TRUE(comm.writeAdu(second));
+  const uint32_t normalGap =
+      comm._nextTxEarliest - arduino_test::now_us();
+  TEST_ASSERT_LESS_OR_EQUAL_UINT32(comm._frameTimeout + 64U, normalGap);
+}
+
+void test_partial_write_consumes_post_gap_but_preserves_failure_holdoff() {
+  resetTestClock();
+  ScriptedStream serial;
+  ModbusRTUComm comm(serial);
+  comm.begin(250000, SERIAL_8N1);
+  serial.setWriteLimit(3U);
+  comm.setPostTxGapUsOnce(4000U);
+
+  ModbusADU request;
+  setReadReq(request, 0x11, 0x03, 0, 1);
+  TEST_ASSERT_FALSE(comm.writeAdu(request));
+  TEST_ASSERT_EQUAL_UINT32(0U, comm._oneShotPostGapUs);
+  const uint32_t failureGap =
+      comm._nextTxEarliest - arduino_test::now_us();
+  TEST_ASSERT_GREATER_OR_EQUAL_UINT32(comm._frameTimeout + 4000U - 64U,
+                                     failureGap);
+
+  arduino_test::advance_us(failureGap + 16U);
+  serial.setWriteLimit(static_cast<size_t>(-1));
+  TEST_ASSERT_TRUE(comm.writeAdu(request));
+  const uint32_t normalGap =
+      comm._nextTxEarliest - arduino_test::now_us();
+  TEST_ASSERT_LESS_OR_EQUAL_UINT32(comm._frameTimeout + 64U, normalGap);
+}
+
+void test_rx_ring_capacity_overflow_drop_and_index_wrap_are_bounded() {
+  resetTestClock();
+  ScriptedStream serial;
+  ModbusRTUComm comm(serial);
+  comm.begin(250000, SERIAL_8N1);
+
+  TEST_ASSERT_EQUAL_UINT32(256U, MBUS_RTU_RX_RING_SIZE);
+  TEST_ASSERT_EQUAL_UINT32(8U, sizeof(ModbusRTUComm::RxEntry));
+  TEST_ASSERT_EQUAL_UINT32(
+      2048U, sizeof(comm._rxRing));
+
+  // One slot distinguishes full from empty, so a 256-entry ring holds 255.
+  for (uint16_t i = 0; i < 255U; ++i) {
+    TEST_ASSERT_TRUE(comm._pushRxByte(static_cast<uint8_t>(i), 1000U + i));
+  }
+  TEST_ASSERT_EQUAL_UINT16(255U, comm._rxCount());
+  TEST_ASSERT_FALSE(comm._pushRxByte(0xEEU, 2000U));
+  TEST_ASSERT_EQUAL_UINT32(1U,
+      comm._rxOverflowCount.load(MBUS_MEM_RELAXED));
+
+  uint8_t byte = 0;
+  uint32_t timestamp = 0;
+  for (uint16_t i = 0; i < 200U; ++i) {
+    TEST_ASSERT_TRUE(comm._popRxByte(byte, timestamp));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(i), byte);
+    TEST_ASSERT_EQUAL_UINT32(1000U + i, timestamp);
+  }
+
+  // Refill across index zero until full again, then prove overflow accounting.
+  for (uint16_t i = 0; i < 200U; ++i) {
+    TEST_ASSERT_TRUE(comm._pushRxByte(
+        static_cast<uint8_t>(0x80U + i), 3000U + i));
+  }
+  TEST_ASSERT_EQUAL_UINT16(255U, comm._rxCount());
+  TEST_ASSERT_TRUE(comm._rxHead.load(MBUS_MEM_RELAXED) <
+                   comm._rxTail.load(MBUS_MEM_RELAXED));
+  TEST_ASSERT_FALSE(comm._pushRxByte(0xEFU, 4000U));
+  TEST_ASSERT_EQUAL_UINT32(2U,
+      comm._rxOverflowCount.load(MBUS_MEM_RELAXED));
+
+  // Drop the 55 retained old entries. The next pop crosses the physical end.
+  comm._dropRxBytes(55U);
+  TEST_ASSERT_EQUAL_UINT16(200U, comm._rxCount());
+  for (uint16_t i = 0; i < 200U; ++i) {
+    TEST_ASSERT_TRUE(comm._popRxByte(byte, timestamp));
+    TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(0x80U + i), byte);
+    TEST_ASSERT_EQUAL_UINT32(3000U + i, timestamp);
+  }
+  TEST_ASSERT_TRUE(comm._rxEmpty());
+  TEST_ASSERT_EQUAL_UINT32(
+      comm._rxHead.load(MBUS_MEM_RELAXED),
+      comm._rxTail.load(MBUS_MEM_RELAXED));
+}
+
 // OGM's validated transport does not require a transceiver-local echo before
 // reporting a completed write. Freeze both that policy and the exact classic
 // FC03 request bytes so migration cannot silently restore the historical seed's
@@ -1067,6 +1272,11 @@ void run_modbus_rtu_transport_tests() {
   RUN_TEST(test_strict_request_after_fc69_preserves_no_reply_gate);
   RUN_TEST(test_tx_success_preserves_driver_write_drain_delay_order);
   RUN_TEST(test_partial_tx_still_drains_delays_and_restores_driver_low);
+  RUN_TEST(test_begin_initializes_de_and_re_receive_safe_but_tx_toggles_only_de);
+  RUN_TEST(test_one_shot_pre_gap_zero_maximum_and_consumption_are_stable);
+  RUN_TEST(test_one_shot_post_gap_uses_maximum_and_is_consumed_after_success);
+  RUN_TEST(test_partial_write_consumes_post_gap_but_preserves_failure_holdoff);
+  RUN_TEST(test_rx_ring_capacity_overflow_drop_and_index_wrap_are_bounded);
   RUN_TEST(test_exact_fc03_tx_bytes_succeed_without_local_echo);
   RUN_TEST(test_exact_fc69_no_reply_bytes_and_crc_are_stable);
   RUN_TEST(test_crc_corruption_uses_frame_precedence_and_clears_output_adu);

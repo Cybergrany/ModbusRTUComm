@@ -26,7 +26,7 @@ A complete backend provides these static operations:
 | --- | --- |
 | Clock/wait | `microsNow()`, `millisNow()`, `sleepMilliseconds()`, `waitDelayMicroseconds()`, and `yieldTask()`. Clocks wrap as `uint32_t`; waits must not return before their logical delay. |
 | Stream | `available()`, `read()`, `write()`, and `waitForTransmitDrain()`. A successful drain means accepted bytes are safe to follow with the caller's post-delay and DE-low transition. |
-| RS485 direction | `configureDriverPins()` establishes receive-safe pins; `setDriverTransmit()` performs only the requested DE transition. Negative pins are unused. |
+| RS485 direction | `configureDriverPins()` configures supplied DE and RE pins as outputs and drives both low (receive-safe); `setDriverTransmit()` performs only the requested DE transition. Negative pins are unused. RE is not toggled per transmission. |
 | Readable hint | `attachReadable()` installs a short edge callback or returns false for polling. `detachReadable()` removes it. Neither operation owns the stream or context. |
 | Event task | `startEventTask()`, `eventTaskRunning()`, `waitEvent()`, `signalEvent()`, and `stopEventTask()`. Signals issued before a wait must remain observable. |
 | Diagnostics | Lock, try-lock, unlock, and capacity checks protect optional logging only; they never serialize Modbus traffic. |
@@ -65,7 +65,8 @@ while (!idle.reached(Platform::microsNow())) {
 ## TX ordering
 
 The transport owns the exact order for every attempted frame, including a
-partial write:
+partial write. RE remains at the receive-safe level established by `begin()`;
+it is deliberately absent from the per-frame sequence:
 
 1. DE high.
 2. Stream write and accepted-byte count.
@@ -90,7 +91,25 @@ Direct serial diagnostics are selected by
 `MBUS_RTU_DIAGNOSTICS_POLICY_HEADER`. The default policy uses
 `MBUS_RTU_ALLOW_DIRECT_SERIAL_DIAGNOSTICS` (default `1`) and defines the final
 `MBUS_RTU_DIRECT_SERIAL_DIAGNOSTICS_ENABLED` value. Set the former to `0` for
-firmware whose console carries framed traffic.
+firmware whose console carries framed traffic. The selection must be identical
+in the application and the separately compiled transport source; a definition
+local to a sketch or one source file is insufficient.
+
+## Supported RX-ring profiles
+
+`MBUS_RTU_RX_RING_SIZE` defaults to `256` entries on generic non-mbed builds
+and `512` entries on the supported mbed/GIGA build. Both are power-of-two
+profiles and are asserted by the production/native and embedded compile gates.
+
+Legacy OGM selected the larger non-mbed ring indirectly with `OGM_BRIDGE`.
+That application selector is intentionally not understood or aliased by this
+neutral package. A non-mbed bridge consumer that needs the established large
+profile must now set the explicit whole-build contract:
+
+```ini
+build_flags =
+  -DMBUS_RTU_RX_RING_SIZE=512
+```
 
 ## Validation boundary
 

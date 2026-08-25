@@ -12,6 +12,10 @@
 // avoid guessing from a repository version or an application-specific macro.
 #define MBUS_RTU_COMM_COMPAT_API_VERSION 1
 #define MBUS_RTU_COMM_HAS_ONE_SHOT_GAPS 1
+// writeAdu() recognizes established no-response operations (unit-zero standard
+// writes and FC69), completes without readAdu(), and holds the following TX
+// behind the calculated turnaround gate.
+#define MBUS_RTU_COMM_HAS_NO_RESPONSE_GATE 1
 
 #ifndef MASTER_RTU_EXTRA_GAP_US
 #define MASTER_RTU_EXTRA_GAP_US 0UL

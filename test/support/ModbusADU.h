@@ -3,6 +3,8 @@
 #ifndef ModbusADU_h
 #define ModbusADU_h
 
+#define MBUS_RTU_TEST_BUNDLED_ADU_FIXTURE 1
+
 #include "Arduino.h"
 
 class ModbusADU {

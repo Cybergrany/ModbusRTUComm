@@ -2,11 +2,15 @@
 #ifndef MODBUS_RTU_GIGA_BUFFERED_SERIAL_H_
 #define MODBUS_RTU_GIGA_BUFFERED_SERIAL_H_
 
+// Ownership marker for migration/ODR compile gates. Exactly one package may
+// define the global GigaBufferedSerial compatibility type in a firmware image.
+#define MBUS_RTU_GIGA_BUFFERED_SERIAL_OWNER_MODBUS_RTU_COMM 1
+
 #include <Arduino.h>
 #include <chrono>
 #include "mbed.h"
 #include "drivers/BufferedSerial.h"
-#include "platform/giga/GigaSerialFormat.h"
+#include "GigaSerialFormat.h"
 
 class GigaBufferedSerial : public arduino::HardwareSerial {
 public:

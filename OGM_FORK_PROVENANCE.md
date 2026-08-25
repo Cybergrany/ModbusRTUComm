@@ -53,7 +53,25 @@ adjustments:
 | `include/IO/comms/MasterComms/ModbusRTUComm.h` | `8351f696024800071fad5e8346c670e7a97626567a2bfa984f7f2dafffe99273` |
 | `include/IO/comms/MasterComms/ModbusRTUComm.cpp` | `cdcaf65dee84e0dea30442e70fca26bcc75b298d1e274d7aa10b67e282226c0d` |
 | `include/IO/comms/ModbusRTUPlatform.h` | `0149753b168d5f2146c9f1630476585c05f308c3e9d99580407b0d7c0b08dcde` |
+| `include/IO/comms/ModbusRTUPlatformBinding.h` | `172287633b9fbe97081108df92e03076a42d34512779ab162cc2092c4600d269` |
 | `include/platform/arduino/ArduinoModbusRTUPlatform.h` | `2b6ee67d29f8ef6a82da0ab0aa2ead62e7e3b739644c64f99b4005f7f65c4ded` |
+| `include/platform/giga/GigaBufferedSerial.h` | `aa7685cbadef884320ef11d72b4ab393c8daf90bbb0c76deaa1f556b5ee1753a` |
+| `include/platform/giga/GigaSerialFormat.h` | `6946560f10a4b8559ae765b1dbc88c1a01ad7a5ae21d7432871b1e373dc4aef0` |
+| `include/IO/comms/ModbusRTUDiagnosticsPolicy.h` | `6053dac802aebf7c557fb451e05bd43b9ea59605dc509d5191064b741e28cb0c` |
+| `include/platform/DirectSerialDiagnosticsPolicy.h` | `da888320a1915f8f8438e354b1116a1d733f0b91fa78f8c6fa0371581a8af376` |
+
+The package deliberately transforms three application-owned selectors instead
+of retaining OGM aliases:
+
+- the diagnostics opt-in `OGM_ALLOW_DIRECT_SERIAL_DIAGNOSTICS` becomes the
+  neutral whole-build selector `MBUS_RTU_ALLOW_DIRECT_SERIAL_DIAGNOSTICS`;
+- non-mbed `OGM_BRIDGE` ring selection becomes the explicit
+  `MBUS_RTU_RX_RING_SIZE=512` profile; and
+- the replayed GIGA headers are package-owned and package-relative, so
+  OGM_Portable relinquishes its old global `GigaBufferedSerial` definition.
+
+These are package-boundary transformations, not transport-flow changes. No
+legacy OGM macro aliases are exported.
 
 This is a software candidate, not a compatibility release. Native and
 toolchain gates are recorded below, but the paired Master consumer build and
@@ -61,9 +79,12 @@ physical GIGA/RS485 checkpoint remain pending.
 
 ## Candidate software evidence
 
-- Trace-enabled native characterization: `34/34` passed.
-- Trace-compiled-out characterization: `30/30` passed.
-- Exact C++11, pedantic warnings-as-errors characterization: `30/30` passed.
+- Trace-enabled native characterization: `39/39` passed.
+- Trace-compiled-out characterization: `35/35` passed.
+- Exact C++11, pedantic warnings-as-errors characterization: `35/35` passed.
+- Drain-failure backend characterization: `1/1` passed.
+- Separate-TU production profile against the immutable ModbusADU pin: `1/1`
+  passed with metrics, direct diagnostics, and trace compiled out.
 - Arduino GIGA/mbed compile with RX event task enabled: passed.
 - Arduino Nano/AVR compile: passed; the deliberately complete example consumes
   `3107/2048` bytes of Nano RAM and is therefore a compile gate, not a deployable
@@ -71,8 +92,9 @@ physical GIGA/RS485 checkpoint remain pending.
 - Deterministic fixtures lock exact FC03/FC69 bytes and CRCs, current
   no-local-echo behavior, T1.5/T3.5 edges, maximum-frame timing, terminal error
   precedence, ADU cleanup, no-response gates, micros rollover, RX state order,
-  DE/write/drain/delay order, partial-write cleanup, event publication/wake
-  order, and a single-frame-wait TX operation budget.
+  DE/write/drain/delay order, partial/drain-failure cleanup, one-shot-gap
+  consumption, ring overflow/wrap/drop, event publication/wake order, and a
+  single-frame-wait TX operation budget.
 
 The GIGA example reports `100688` bytes flash and `51168` bytes RAM, but this is
 only a standalone compile. Paired whole-firmware map/resource comparison must
@@ -121,8 +143,9 @@ of the following evidence is recorded against the exact dependency tuple:
    package locks resolve to immutable dependency commits.
 2. Frame parity: transmitted bytes, CRCs, receive boundaries, buffer cleanup,
    local echo and timeout/frame/CRC errors match frozen OGM fixtures.
-3. Ordering and timing parity: serial write, drain, delays, DE/RE transitions,
-   locks and no-response completion occur in the established order.
+3. Ordering and timing parity: serial write, drain, delays, DE transitions,
+   receive-safe RE initialization, locks and no-response completion occur in
+   the established order.
 4. Resource/performance parity: paired timing gates pass and embedded
    stack/RAM/flash changes are understood and accepted.
 5. Consumer validation: native suites and exact supported OGM master, bridge

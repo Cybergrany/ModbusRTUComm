@@ -33,17 +33,41 @@
         "include/IO/comms/ModbusRTUPlatformBinding.h": "172287633b9fbe97081108df92e03076a42d34512779ab162cc2092c4600d269",
         "include/platform/arduino/ArduinoModbusRTUPlatform.h": "2b6ee67d29f8ef6a82da0ab0aa2ead62e7e3b739644c64f99b4005f7f65c4ded",
         "include/platform/giga/GigaBufferedSerial.h": "aa7685cbadef884320ef11d72b4ab393c8daf90bbb0c76deaa1f556b5ee1753a",
-        "include/platform/giga/GigaSerialFormat.h": "6946560f10a4b8559ae765b1dbc88c1a01ad7a5ae21d7432871b1e373dc4aef0"
+        "include/platform/giga/GigaSerialFormat.h": "6946560f10a4b8559ae765b1dbc88c1a01ad7a5ae21d7432871b1e373dc4aef0",
+        "include/IO/comms/ModbusRTUDiagnosticsPolicy.h": "6053dac802aebf7c557fb451e05bd43b9ea59605dc509d5191064b741e28cb0c",
+        "include/platform/DirectSerialDiagnosticsPolicy.h": "da888320a1915f8f8438e354b1116a1d733f0b91fa78f8c6fa0371581a8af376"
       }
+    },
+    "package_transformations": {
+      "diagnostics_selector": {
+        "source": "OGM_ALLOW_DIRECT_SERIAL_DIAGNOSTICS",
+        "package": "MBUS_RTU_ALLOW_DIRECT_SERIAL_DIAGNOSTICS",
+        "legacy_alias": false
+      },
+      "non_mbed_large_ring_selector": {
+        "source": "OGM_BRIDGE",
+        "package": "MBUS_RTU_RX_RING_SIZE=512",
+        "legacy_alias": false
+      },
+      "giga_serial_type_ownership": {
+        "package_owned": true,
+        "include_resolution": "package_relative",
+        "portable_global_definition_retained": false
+      }
+    },
+    "capabilities": {
+      "no_response_next_tx_gate": "MBUS_RTU_COMM_HAS_NO_RESPONSE_GATE=1"
     },
     "replay_commits": {
       "platform_boundary": "2e5e6971ed41e65860676a3532b5f4f7b5781994",
       "transport_state_machine": "ab792d140609e50e4778f664ab87895ccffc4abb"
     },
     "software_gates": {
-      "native_trace_on": "34_passed",
-      "native_trace_off": "30_passed",
-      "native_cxx11": "30_passed",
+      "native_trace_on": "39_passed",
+      "native_trace_off": "35_passed",
+      "native_cxx11": "35_passed",
+      "native_drain_failure_backend": "1_passed",
+      "native_separate_tu_production_profile": "1_passed",
       "arduino_giga_mbed_compile": "passed",
       "arduino_nano_avr_compile": "passed_compile_only_ram_exceeds_target",
       "paired_consumer_build_and_resource_diff": "pending",

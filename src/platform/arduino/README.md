@@ -14,8 +14,8 @@ On Arduino GIGA/mbed the backend additionally:
 - joins and releases task resources during stop;
 - reports the current mbed task stack when the RTOS supplies valid values; and
 - waits an accepted-byte wire-time estimate instead of calling
-  `BufferedSerial::sync()`, which can wedge the worker used by the validated
-  firmware.
+  `BufferedSerial::sync()`, which can wedge the worker used by the established
+  firmware behavior.
 
 The estimate is deliberately conservative but is not measurement of UART
 shift-register empty or RS485 electrical idle. Physical turnaround remains a
@@ -30,6 +30,17 @@ bus.begin(250000, SERIAL_8N1);
 ModbusRTUComm comm(bus, DE_PIN, RE_PIN);
 comm.begin(250000, SERIAL_8N1);
 ```
+
+This package owns both the global `GigaBufferedSerial` compatibility type and
+its `GigaSerialFormat` helper. Its Arduino backend includes those headers by a
+package-relative path so an application include directory cannot silently
+substitute a different definition. OGM_Portable must remove or exclude its old
+global copy when selecting this package; compiling both definitions into one
+firmware image violates the C++ one-definition rule.
+
+At `begin()`, supplied DE and RE pins are configured as outputs and driven low.
+Only DE transitions around later transmissions; RE remains in its receive-safe
+state and is not part of the per-frame transmit sequence.
 
 Readable callbacks are hints only; they do not parse frames or own bytes. They
 set transport state and signal the task, which later drains the stream through

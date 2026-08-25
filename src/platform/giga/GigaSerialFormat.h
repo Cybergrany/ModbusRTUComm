@@ -2,6 +2,8 @@
 #ifndef MODBUS_RTU_GIGA_SERIAL_FORMAT_H_
 #define MODBUS_RTU_GIGA_SERIAL_FORMAT_H_
 
+#define MBUS_RTU_GIGA_SERIAL_FORMAT_OWNER_MODBUS_RTU_COMM 1
+
 #include <Arduino.h>
 #include <cstdint>
 #include "drivers/BufferedSerial.h"

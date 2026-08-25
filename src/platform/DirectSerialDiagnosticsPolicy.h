@@ -1,7 +1,7 @@
 #ifndef MODBUS_RTU_DIRECT_SERIAL_DIAGNOSTICS_POLICY_H_
 #define MODBUS_RTU_DIRECT_SERIAL_DIAGNOSTICS_POLICY_H_
 
-// Default-on preserves the validated compatibility transport behavior. A
+// Default-on preserves the established compatibility transport behavior. A
 // firmware whose default Serial endpoint carries framed traffic must set this
 // to 0 for the whole dependency tree. This removes plaintext output only;
 // Modbus recovery/error results remain active. Exact drain-escape counters

@@ -44,6 +44,7 @@ GIGA serial-format namespace; transport control flow remains the source anchor.
 | --- | --- | --- |
 | Static platform facade and Arduino/mbed backend | `2e5e6971ed41e65860676a3532b5f4f7b5781994` | `2055adb`; principally `2cb91ce`, `c95cdf5`, `cfbd946`, `e0cd769`, `59403e1` |
 | RTU RX/TX state machine and characterization suite | `ab792d140609e50e4778f664ab87895ccffc4abb` | `2055adb`; snapshot `a3551eab` plus reviewed fixes through `0bb8ed6` |
+| Candidate capabilities, production profile and edge hardening | `c2834875185d895eb92d5f11844783d76f600612` | `2055adb`; neutral selector/ownership transformations and frozen edge behavior |
 
 The raw OGM source files at that anchor were captured before package-only
 adjustments:

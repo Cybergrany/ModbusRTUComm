@@ -61,7 +61,7 @@
     "replay_commits": {
       "platform_boundary": "2e5e6971ed41e65860676a3532b5f4f7b5781994",
       "transport_state_machine": "ab792d140609e50e4778f664ab87895ccffc4abb",
-      "candidate_hardening": "c2834875185d895eb92d5f11844783d76f600612"
+      "candidate_hardening": "c283487d8a7457d2defde3b1a4caeed1b9639b1b"
     },
     "software_gates": {
       "native_trace_on": "39_passed",

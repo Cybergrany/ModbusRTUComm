@@ -22,7 +22,7 @@
     }
   },
   "ogm_functional_replay": {
-    "status": "software_candidate_consumer_gate_pending",
+    "status": "hardware_accepted_release_tagged",
     "source": {
       "repository": "OGM_Portable",
       "commit": "2055adb449c1e767217f09f99efda32e52a0306d",
@@ -71,8 +71,19 @@
       "native_separate_tu_production_profile": "1_passed",
       "arduino_giga_mbed_compile": "passed",
       "arduino_nano_avr_compile": "passed_compile_only_ram_exceeds_target",
-      "paired_consumer_build_and_resource_diff": "pending",
-      "physical_rs485": "pending"
+      "paired_consumer_build_and_resource_diff": "passed",
+      "physical_rs485": "passed_2026-08-26_unchanged_deployed_slaves"
+    },
+    "release": {
+      "tag": "1.2.0-ogm.1",
+      "commit": "10477dd4af395331c86692f03f9d0c5c709fa684",
+      "master_commit": "61491e27593f15ad9a10e0fcf74595f623a63c1b",
+      "master_firmware_sha256": "cec149eeb0e1751671724cf1d765cbe06e4a55704d1f4662402271f516315eb0",
+      "bridge_console_firmware_sha256": "be0c32c3632c930ae9d8df7bbdf4d63f720e35e77dcf85880851d4239a440b81",
+      "master_log_sha256": "0f12caab08b50beb1bb5cba643945a7a1a46d62e6a498b3c43a66ce5c3cd9f6b",
+      "combined_log_sha256": "53aa85d81f25b6efb907daa1a577e8c7f57dab92f09091d629ea88bd5526cec1",
+      "accepted_date": "2026-08-26",
+      "deployed_slave_firmware": "unchanged"
     }
   }
 }

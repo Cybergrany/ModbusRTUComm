@@ -7,11 +7,11 @@ receive mechanics, timing boundaries, response classification, recovery, and
 optional static platform backends around a caller-owned Arduino `Stream`.
 
 > [!IMPORTANT]
-> The functional replay is software-gated but not yet a release. Do not pin an
-> OGM consumer to this branch until the exact Master/Comm tuple has passed its
-> consumer builds and physical RS485 checkpoint. `main` remains the unmodified
-> current CMB27 line; compatibility work exists only on `ogm/compat` and
-> reviewed branches based on it.
+> The exact replay at `1.2.0-ogm.1` completed its OGM consumer builds and
+> physical GIGA/RS485 checkpoints with unchanged deployed slave firmware on
+> 2026-08-26. Consume that immutable tag or its full commit, not a moving
+> branch. `main` remains the unmodified current CMB27 line; compatibility work
+> exists only on `ogm/compat` and reviewed branches based on it.
 
 ## Repository lines
 
@@ -179,11 +179,13 @@ Pin an immutable compatibility tag or full commit, never a moving branch:
 
 ```ini
 lib_deps =
-  https://github.com/Cybergrany/ModbusRTUComm.git#<validated-tag-or-40-char-commit>
+  https://github.com/Cybergrany/ModbusRTUComm.git#1.2.0-ogm.1
 ```
 
-The prerelease package version is `1.2.0-ogm.1`; it is not a hardware-validated
-release or tag. `library.json` pins the reviewed ModbusADU Git commit.
+The OGM-qualified package version and immutable compatibility tag are both
+`1.2.0-ogm.1`. The tag resolves to the exact behavior-bearing commit exercised
+on hardware. Later documentation commits on `ogm/compat` do not redefine that
+release. `library.json` pins the reviewed ModbusADU Git commit.
 `library.properties` intentionally makes no mutable version-range dependency
 claim because that format cannot express the required commit. Do not override
 the dependency pair without repeating the compatibility gates.

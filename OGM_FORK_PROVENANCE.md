@@ -74,9 +74,13 @@ of retaining OGM aliases:
 These are package-boundary transformations, not transport-flow changes. No
 legacy OGM macro aliases are exported.
 
-This is a software candidate, not a compatibility release. Native and
-toolchain gates are recorded below, but the paired Master consumer build and
-physical GIGA/RS485 checkpoint remain pending.
+The exact replay commit
+`10477dd4af395331c86692f03f9d0c5c709fa684` is the hardware-accepted
+compatibility release `1.2.0-ogm.1`. Native and toolchain gates are recorded
+below. The paired OGM consumer builds, master-only checkpoint, and combined
+master/bridge checkpoint completed with unchanged deployed slave firmware on
+2026-08-26. Later commits on `ogm/compat` are not covered unless separately
+validated.
 
 ## Candidate software evidence
 
@@ -100,6 +104,33 @@ physical GIGA/RS485 checkpoint remain pending.
 The GIGA example reports `100688` bytes flash and `51168` bytes RAM, but this is
 only a standalone compile. Paired whole-firmware map/resource comparison must
 use the exact Master dependency tuple before advancing to hardware.
+
+## Compatibility release evidence
+
+The accepted release tuple is:
+
+```text
+ModbusRTUMaster 61491e27593f15ad9a10e0fcf74595f623a63c1b
+  -> ModbusRTUComm 10477dd4af395331c86692f03f9d0c5c709fa684
+  -> ModbusADU     7cb0e24f0abe86bc83e114325d75fe7a7d878562
+```
+
+The exact clean consumer artifacts subsequently flashed by the user were:
+
+- `MASTER` SHA-256
+  `cec149eeb0e1751671724cf1d765cbe06e4a55704d1f4662402271f516315eb0`;
+- `bridge_console` SHA-256
+  `be0c32c3632c930ae9d8df7bbdf4d63f720e35e77dcf85880851d4239a440b81`.
+
+The master-only log (`master-review.csv`, SHA-256
+`0f12caab08b50beb1bb5cba643945a7a1a46d62e6a498b3c43a66ce5c3cd9f6b`)
+and the 59.94-minute combined master/bridge log (`bridge-master.csv`, SHA-256
+`53aa85d81f25b6efb907daa1a577e8c7f57dab92f09091d629ea88bd5526cec1`)
+showed no new persistent ACK debt, queue overflow, hash mismatch, spontaneous
+reset, replay/catch-up activity, or failure-rate warning against the accepted
+baselines. Gameplay/output feel was accepted by the user. This is scoped
+evidence for the immutable tuple above, not a blanket hardware claim for later
+commits or different networks.
 
 ## Remote layout
 

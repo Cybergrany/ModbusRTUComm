@@ -33,12 +33,104 @@ The machine-readable form of these anchors and the package dependency pin is
 
 ## Current compatibility status
 
-The initial `ogm/compat` seed adds provenance and package metadata only. Its
-transport source files remain identical to the historical CMB27 branch point,
-and `ogm_functional_replay` in `ogm-fork-lock.json` remains `not_started` until
-the first reviewed source replay lands. A successful seed compile demonstrates
-that the historical package can still be resolved; it does not demonstrate
-that current OGM consumers can switch to it without a behavior delta.
+The current replay candidate moves the platform boundary and complete transport
+state machine from immutable OGM_Portable commit
+`2055adb449c1e767217f09f99efda32e52a0306d` into this fork. It contains no OGM
+pin, board, game, child, or topology dependency. The package boundary changes
+only include paths, neutral capability macros, diagnostics-policy naming, and a
+GIGA serial-format namespace; transport control flow remains the source anchor.
+
+| Replay theme | Fork commit | Source anchor/themes |
+| --- | --- | --- |
+| Static platform facade and Arduino/mbed backend | `2e5e6971ed41e65860676a3532b5f4f7b5781994` | `2055adb`; principally `2cb91ce`, `c95cdf5`, `cfbd946`, `e0cd769`, `59403e1` |
+| RTU RX/TX state machine and characterization suite | `ab792d140609e50e4778f664ab87895ccffc4abb` | `2055adb`; snapshot `a3551eab` plus reviewed fixes through `0bb8ed6` |
+| Candidate capabilities, production profile and edge hardening | `c283487d8a7457d2defde3b1a4caeed1b9639b1b` | `2055adb`; neutral selector/ownership transformations and frozen edge behavior |
+
+The raw OGM source files at that anchor were captured before package-only
+adjustments:
+
+| OGM source | SHA-256 |
+| --- | --- |
+| `include/IO/comms/MasterComms/ModbusRTUComm.h` | `8351f696024800071fad5e8346c670e7a97626567a2bfa984f7f2dafffe99273` |
+| `include/IO/comms/MasterComms/ModbusRTUComm.cpp` | `cdcaf65dee84e0dea30442e70fca26bcc75b298d1e274d7aa10b67e282226c0d` |
+| `include/IO/comms/ModbusRTUPlatform.h` | `0149753b168d5f2146c9f1630476585c05f308c3e9d99580407b0d7c0b08dcde` |
+| `include/IO/comms/ModbusRTUPlatformBinding.h` | `172287633b9fbe97081108df92e03076a42d34512779ab162cc2092c4600d269` |
+| `include/platform/arduino/ArduinoModbusRTUPlatform.h` | `2b6ee67d29f8ef6a82da0ab0aa2ead62e7e3b739644c64f99b4005f7f65c4ded` |
+| `include/platform/giga/GigaBufferedSerial.h` | `aa7685cbadef884320ef11d72b4ab393c8daf90bbb0c76deaa1f556b5ee1753a` |
+| `include/platform/giga/GigaSerialFormat.h` | `6946560f10a4b8559ae765b1dbc88c1a01ad7a5ae21d7432871b1e373dc4aef0` |
+| `include/IO/comms/ModbusRTUDiagnosticsPolicy.h` | `6053dac802aebf7c557fb451e05bd43b9ea59605dc509d5191064b741e28cb0c` |
+| `include/platform/DirectSerialDiagnosticsPolicy.h` | `da888320a1915f8f8438e354b1116a1d733f0b91fa78f8c6fa0371581a8af376` |
+
+The package deliberately transforms three application-owned selectors instead
+of retaining OGM aliases:
+
+- the diagnostics opt-in `OGM_ALLOW_DIRECT_SERIAL_DIAGNOSTICS` becomes the
+  neutral whole-build selector `MBUS_RTU_ALLOW_DIRECT_SERIAL_DIAGNOSTICS`;
+- non-mbed `OGM_BRIDGE` ring selection becomes the explicit
+  `MBUS_RTU_RX_RING_SIZE=512` profile; and
+- the replayed GIGA headers are package-owned and package-relative, so
+  OGM_Portable relinquishes its old global `GigaBufferedSerial` definition.
+
+These are package-boundary transformations, not transport-flow changes. No
+legacy OGM macro aliases are exported.
+
+The exact replay commit
+`10477dd4af395331c86692f03f9d0c5c709fa684` is the hardware-accepted
+compatibility release `1.2.0-ogm.1`. Native and toolchain gates are recorded
+below. The paired OGM consumer builds, master-only checkpoint, and combined
+master/bridge checkpoint completed with unchanged deployed slave firmware on
+2026-08-26. Later commits on `ogm/compat` are not covered unless separately
+validated.
+
+## Candidate software evidence
+
+- Trace-enabled native characterization: `39/39` passed.
+- Trace-compiled-out characterization: `35/35` passed.
+- Exact C++11, pedantic warnings-as-errors characterization: `35/35` passed.
+- Drain-failure backend characterization: `1/1` passed.
+- Separate-TU production profile against the immutable ModbusADU pin: `1/1`
+  passed with metrics, direct diagnostics, and trace compiled out.
+- Arduino GIGA/mbed compile with RX event task enabled: passed.
+- Arduino Nano/AVR compile: passed; the deliberately complete example consumes
+  `3107/2048` bytes of Nano RAM and is therefore a compile gate, not a deployable
+  Nano footprint claim.
+- Deterministic fixtures lock exact FC03/FC69 bytes and CRCs, current
+  no-local-echo behavior, T1.5/T3.5 edges, maximum-frame timing, terminal error
+  precedence, ADU cleanup, no-response gates, micros rollover, RX state order,
+  DE/write/drain/delay order, partial/drain-failure cleanup, one-shot-gap
+  consumption, ring overflow/wrap/drop, event publication/wake order, and a
+  single-frame-wait TX operation budget.
+
+The GIGA example reports `100688` bytes flash and `51168` bytes RAM, but this is
+only a standalone compile. Paired whole-firmware map/resource comparison must
+use the exact Master dependency tuple before advancing to hardware.
+
+## Compatibility release evidence
+
+The accepted release tuple is:
+
+```text
+ModbusRTUMaster 61491e27593f15ad9a10e0fcf74595f623a63c1b
+  -> ModbusRTUComm 10477dd4af395331c86692f03f9d0c5c709fa684
+  -> ModbusADU     7cb0e24f0abe86bc83e114325d75fe7a7d878562
+```
+
+The exact clean consumer artifacts subsequently flashed by the user were:
+
+- `MASTER` SHA-256
+  `cec149eeb0e1751671724cf1d765cbe06e4a55704d1f4662402271f516315eb0`;
+- `bridge_console` SHA-256
+  `be0c32c3632c930ae9d8df7bbdf4d63f720e35e77dcf85880851d4239a440b81`.
+
+The master-only log (`master-review.csv`, SHA-256
+`0f12caab08b50beb1bb5cba643945a7a1a46d62e6a498b3c43a66ce5c3cd9f6b`)
+and the 59.94-minute combined master/bridge log (`bridge-master.csv`, SHA-256
+`53aa85d81f25b6efb907daa1a577e8c7f57dab92f09091d629ea88bd5526cec1`)
+showed no new persistent ACK debt, queue overflow, hash mismatch, spontaneous
+reset, replay/catch-up activity, or failure-rate warning against the accepted
+baselines. Gameplay/output feel was accepted by the user. This is scoped
+evidence for the immutable tuple above, not a blanket hardware claim for later
+commits or different networks.
 
 ## Remote layout
 
@@ -83,8 +175,9 @@ of the following evidence is recorded against the exact dependency tuple:
    package locks resolve to immutable dependency commits.
 2. Frame parity: transmitted bytes, CRCs, receive boundaries, buffer cleanup,
    local echo and timeout/frame/CRC errors match frozen OGM fixtures.
-3. Ordering and timing parity: serial write, drain, delays, DE/RE transitions,
-   locks and no-response completion occur in the established order.
+3. Ordering and timing parity: serial write, drain, delays, DE transitions,
+   receive-safe RE initialization, locks and no-response completion occur in
+   the established order.
 4. Resource/performance parity: paired timing gates pass and embedded
    stack/RAM/flash changes are understood and accepted.
 5. Consumer validation: native suites and exact supported OGM master, bridge
@@ -97,6 +190,6 @@ not alter on-wire behavior; it does not replace item 6. Hardware that merely
 appears playable likewise does not replace the trace, ordering or performance
 gates.
 
-The seed manifest pins ModbusADU to
+The compatibility manifest pins ModbusADU to
 `7cb0e24f0abe86bc83e114325d75fe7a7d878562`, whose implementation is the one
 originally imported by OGM and remains the reviewed upstream revision.

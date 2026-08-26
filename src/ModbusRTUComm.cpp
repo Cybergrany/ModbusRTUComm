@@ -1,5 +1,5 @@
-// CMB27/ModbusRTUComm plus the compatibility transport replay described in
-// OGM_FORK_PROVENANCE.md. Distributed under the repository MIT license.
+// Modbus RTU transport implementation.
+// Derived-source attribution is covered by the repository MIT license.
 #include "ModbusRTUComm.h"
 #include "ModbusRTUPlatformBinding.h"
 

@@ -1,125 +1,120 @@
 # ModbusRTUComm
 
-This is the OpenGameMaster-maintained, provenance-preserving fork of
-[`CMB27/ModbusRTUComm`](https://github.com/CMB27/ModbusRTUComm). It keeps the
-small Arduino `Stream` transport API while adding production RTU framing,
-recovery, explicit no-response ordering, observability, and portable static
-platform bindings required by sustained multidrop networks.
+`ModbusRTUComm` is a low-level Arduino transport for Modbus RTU. It sends and
+receives `ModbusADU` frames, enforces RTU timing, controls RS485 direction
+pins, and recovers from damaged or unrelated input.
 
-> [!IMPORTANT]
-> The exact replay at `1.2.0-ogm.1` completed its OGM consumer builds and
-> physical GIGA/RS485 checkpoints with unchanged deployed slave firmware on
-> 2026-08-26. Consume that immutable tag or its full commit, not a moving
-> branch. This repository's `main` is the maintained OGM fork; later CMB27
-> development remains available through the `upstream` remote and is reconciled
-> only as an explicit, test-gated behavior change.
+It is not a complete Modbus master or slave. Most applications use it through
+a protocol layer such as
+[`ModbusRTUMaster`](https://github.com/Cybergrany/ModbusRTUMaster).
+
+## When to use it
+
+Use this library when you are:
+
+- building a Modbus master or server around a custom protocol layer;
+- driving a half-duplex RS485 transceiver with DE and optional RE pins;
+- receiving bytes through a buffered or event-driven serial backend;
+- handling broadcasts where the next transmission must wait for bus idle; or
+- adding transport metrics without coupling protocol code to one platform.
 
 ## What this fork adds
 
-- continuous buffered ingress with T1.5/T3.5-aware extraction and recovery;
-- deterministic DE/write/drain/delay ordering and receive-safe initialization;
-- explicit broadcast/FC69 no-response and next-transmit gates;
-- late, stray, duplicate, overflow and terminal-error classification;
-- one-shot scheduling gaps without changing base RTU timing;
-- optional allocation-free metrics, trace, and RX event-task support; and
-- compile-time platform bindings, including the tested Arduino GIGA/mbed path.
+- **Continuous buffered receive and recovery.** Timestamped ingress separates
+  frames at T1.5/T3.5 boundaries and classifies late, duplicate, stray,
+  overflowed, CRC-invalid, and malformed input. This helps long-running
+  multidrop systems recover without restarting the transport. See
+  [`ModbusRTUComm.h`](src/ModbusRTUComm.h) and the
+  [test matrix](test/README.md).
+- **Deterministic RS485 direction order.** Each send follows DE high, write,
+  drain, post-delay, and DE low. This is useful with transceivers that must not
+  release the bus before the final stop bit has cleared. See the
+  [platform TX contract](src/platform/README.md#tx-ordering).
+- **No-response and next-transmit gates.** Broadcast and fire-and-forget users
+  can finish without reading a reply while still preserving the required bus
+  turnaround delay.
+- **One-shot scheduling gaps.** A caller can add a pre- or post-transmit gap to
+  one transaction without changing normal RTU timing for the rest of the bus.
+- **Static platform binding.** Clocks, delays, GPIO, drain handling, readable
+  events, tasks, and trace hooks can be replaced at compile time without
+  virtual dispatch or allocation. See the
+  [platform API](src/platform/README.md) and
+  [Arduino backend](src/platform/arduino/README.md).
+- **Optional metrics and diagnostics.** Detailed counters, timing snapshots,
+  trace hooks, and RX-task stack data are compiled only when requested. See
+  [configuration](#configuration).
 
-The maintained line descends from the exact historical CMB27 source imported
-by OGM, so Git history shows each replayed improvement on top of that original
-implementation. Do not mechanically merge a newer upstream redesign into this
-line. Exact branch points, source hashes, replay commits, and gate status are in
-[`OGM_FORK_PROVENANCE.md`](OGM_FORK_PROVENANCE.md) and
-[`ogm-fork-lock.json`](ogm-fork-lock.json).
+## Quick start
 
-## Responsibilities
-
-`ModbusRTUComm` owns:
-
-- T1.5/T3.5 timing and response-start, maximum-frame, late-grace, and drain
-  boundaries;
-- exact ADU transmission after CRC update;
-- receive-safe DE/RE initialization, followed by DE-high, stream write, TX
-  drain, post-delay, and DE-low ordering for each transmission (RE is not
-  toggled per frame);
-- continuous RX ingress, frame extraction, CRC/frame/timeout classification,
-  duplicate/stray/late recovery, and output-buffer cleanup;
-- no-response/broadcast turnaround gates; and
-- optional compile-time metrics, trace, and RX event-task support.
-
-It does not build Modbus requests, interpret register semantics, own the
-`Stream`, configure its baud/format, retry application operations, or define
-any board/game/topology concepts.
-
-## Basic use
-
-Configure the UART before the transport. Negative direction pins mean that the
-pin is not supplied. `begin()` configures supplied DE and RE pins as outputs and
-drives both low; only DE transitions around later writes.
+The application owns the serial port and must configure it before calling
+`begin()`.
 
 ```cpp
 #include <Arduino.h>
 #include <ModbusADU.h>
 #include <ModbusRTUComm.h>
 
-constexpr unsigned long kBaud = 250000UL;
-ModbusRTUComm transport(Serial1, 2, 3);  // Stream, DE, optional RE
+constexpr unsigned long kBaud = 19200UL;
+constexpr int8_t kDriverEnablePin = 2;
+
+ModbusRTUComm transport(Serial1, kDriverEnablePin);
 
 void setup() {
   Serial1.begin(kBaud, SERIAL_8N1);
   transport.begin(kBaud, SERIAL_8N1);
-  transport.setTimeout(20UL);            // response-start timeout, ms
+  transport.setTimeout(250UL);
 }
 
-ModbusRTUCommError transact(ModbusADU& requestAndResponse) {
-  if (!transport.writeAdu(requestAndResponse)) {
+ModbusRTUCommError readOneHoldingRegister(uint8_t unit, uint16_t address,
+                                         uint16_t& value) {
+  ModbusADU adu;
+  adu.setUnitId(unit);
+  adu.setFunctionCode(3);
+  adu.setDataRegister(0, address);
+  adu.setDataRegister(2, 1);
+  adu.setDataLen(4);
+
+  if (!transport.writeAdu(adu)) {
     return MODBUS_RTU_COMM_FRAME_ERROR;
   }
-  return transport.readAdu(requestAndResponse);
+
+  const ModbusRTUCommError result = transport.readAdu(adu);
+  if (result == MODBUS_RTU_COMM_SUCCESS) {
+    value = adu.getDataRegister(1);
+  }
+  return result;
 }
 ```
 
-`writeAdu()` updates the CRC and returns false for a partial write, failed drain,
-or failed pre-TX cleanup. The replayed transport does not require a
-transceiver-local echo. `readAdu()` uses the unit/function already present in
-the ADU as its expected response identity, clears the output length before
-reading, and returns one of:
+`writeAdu()` updates the CRC. It returns `false` if the frame cannot be fully
+written or drained. `readAdu()` uses the unit and function already stored in
+the ADU to identify the expected response.
+
+## Result values
 
 | Value | Meaning |
 | --- | --- |
-| `MODBUS_RTU_COMM_SUCCESS` (`0`) | A matching CRC-valid response was committed to the ADU. |
-| `MODBUS_RTU_COMM_TIMEOUT` (`1`) | No terminal framing/CRC error outranked the response timeout. |
-| `MODBUS_RTU_COMM_FRAME_ERROR` (`2`) | A terminal framing/drain error occurred. Frame damage outranks CRC damage when both are observed during resynchronization. |
-| `MODBUS_RTU_COMM_CRC_ERROR` (`3`) | CRC damage was the terminal classified error. |
+| `MODBUS_RTU_COMM_SUCCESS` | A matching, CRC-valid response was received. |
+| `MODBUS_RTU_COMM_TIMEOUT` | No matching response completed before the timeout. |
+| `MODBUS_RTU_COMM_FRAME_ERROR` | Framing, drain, or terminal receive recovery failed. |
+| `MODBUS_RTU_COMM_CRC_ERROR` | The terminal candidate had an invalid CRC. |
 
-## One-shot scheduling gaps
-
-Higher-level libraries may request a minimum pre- or post-transmit holdoff for
-the next transaction without changing the base RTU timing:
+## One-shot gaps
 
 ```cpp
 transport.setPreTxGapUsOnce(5000UL);
 transport.setPostTxGapUsOnce(3000UL);
-transport.writeAdu(request);
+transport.writeAdu(adu);
 ```
 
-The capability macros `MBUS_RTU_COMM_COMPAT_API_VERSION` and
-`MBUS_RTU_COMM_HAS_ONE_SHOT_GAPS` let a higher-level fork remain buildable
-against the historical seed while selecting these APIs only when available.
+Each value is consumed by the next attempted transaction. Use this for a
+specific slow device or transition, not as a replacement for correct bus-wide
+RTU timing.
 
-`MBUS_RTU_COMM_HAS_NO_RESPONSE_GATE=1` separately asserts that unit-zero
-standard writes and FC69 complete without `readAdu()` while retaining their
-next-TX turnaround boundary. Higher-level libraries should require
-this capability rather than infer it from the one-shot-gap API.
+## Platform backends
 
-## Platform binding
-
-The default backend is
-[`ArduinoModbusRTUPlatform`](src/platform/arduino/ArduinoModbusRTUPlatform.h).
-The neutral contract and full backend authoring example are documented in
-[`src/platform/README.md`](src/platform/README.md); GIGA/mbed behavior is in the
-[`Arduino backend README`](src/platform/arduino/README.md).
-
-A consumer can select another static backend for the whole build:
+The default backend uses Arduino clocks, delays, GPIO, and `Stream`. A build
+can select another static backend:
 
 ```ini
 build_flags =
@@ -127,37 +122,40 @@ build_flags =
   -DMBUS_RTU_PLATFORM_TYPE=my::ModbusPlatform
 ```
 
-Selection is compile-time only. The facade adds no virtual dispatch, function
-table, stored platform pointer, or per-call type erasure.
+The selected backend must implement the contract in
+[`src/platform/README.md`](src/platform/README.md). Use the same selection in
+every translation unit that includes the library.
 
-This package now owns the global `GigaBufferedSerial` compatibility type and
-uses relative internal includes so an application include path cannot replace
-it. During consumer cutover, OGM_Portable must relinquish/exclude its old copy;
-compiling both definitions in one firmware image is an ODR violation.
+## Configuration
 
-## Optional diagnostics and metrics
+Common whole-build options include:
 
-- Set `MBUS_RTU_ALLOW_DIRECT_SERIAL_DIAGNOSTICS=0` when the default console
-  carries framed traffic. A custom policy can instead be selected with
-  `MBUS_RTU_DIAGNOSTICS_POLICY_HEADER`. This must be a whole-build flag: defining
-  it only in a sketch does not configure the separately compiled library TU.
-- Set `MBUS_DETAILED_METRICS=1` for `DebugInfo` and `debugInfo()`. The header
-  then defines `MBUS_RTU_COMM_HAS_DEBUG_INFO=1`.
-- Set `MBUS_RTU_PLATFORM_TRACE=1` only for characterization. Trace adds clock
-  calls and can perturb timing.
-- RX event-task support is controlled by `MBUS_RTU_ENABLE_RX_THREAD` and
-  `MBUS_RTU_RX_THREAD_STACK_BYTES`. Stack-watermark diagnostics are separately
-  gated and expose `MBUS_RTU_COMM_HAS_RX_STACK_SNAPSHOT` only when active.
+- `MBUS_RTU_ALLOW_DIRECT_SERIAL_DIAGNOSTICS=0` when the diagnostics console
+  shares the Modbus serial port;
+- `MBUS_DETAILED_METRICS=1` for `debugInfo()`;
+- `MBUS_RTU_ENABLE_RX_THREAD=1` when the selected backend supports an RX event
+  task; and
+- `MBUS_RTU_RX_RING_SIZE=<power-of-two>` to choose a larger ingress ring for a
+  busy or high-latency system.
 
-Every macro affecting class layout or compiled behavior must be consistent in
-all translation units that include the library.
+Options that affect class layout or behavior must be identical in the
+application and the separately compiled library source.
 
-## Tests and compile gates
+## Examples and reference
 
-Run the deterministic native variants:
+- [Basic low-level transaction](examples/Basic/Basic.ino)
+- [Example configuration notes](examples/Basic/README.md)
+- [Platform backend contract](src/platform/README.md)
+- [Arduino and GIGA/mbed backend](src/platform/arduino/README.md)
+- [Public transport header](src/ModbusRTUComm.h)
+- [Validation guide](test/README.md)
+
+## Testing
+
+The PlatformIO native environments cover production, trace, C++11, and
+failure backends:
 
 ```sh
-export PLATFORMIO_CORE_DIR=/absolute/path/to/a/writable/platformio-core
 pio test -e native_trace_on
 pio test -e native_trace_off
 pio test -e native_cxx11
@@ -165,33 +163,9 @@ pio test -e native_failure_backend
 pio test -e production_profile
 ```
 
-The suite freezes exact FC03/FC69 bytes and CRCs, no-local-echo behavior,
-T1.5/T3.5 edges, maximum response duration, state/error precedence, buffer
-cleanup, one-shot-gap consumption, no-response gates, ring overflow/wrap/drop,
-receive-safe RE initialization, DE/write/drain/delay order (including drain
-failure), task/wake order, trace-on/off behavior, a production separate-TU ABI
-profile, and a deterministic hot-path operation budget.
-See [`test/README.md`](test/README.md).
+Native tests verify logical timing and operation order, but not UART interrupt
+latency or electrical RS485 turnaround. Validate those on each target.
 
-An embedded release candidate must additionally compile the included
-[`Basic`](examples/Basic/Basic.ino) example for each supported toolchain and
-run the exact consumer dependency tree. Native passing results do not prove
-UART interrupt latency, drain duration, mbed scheduling, RS485 electrical
-turnaround, or physical compatibility with deployed firmware.
+## License
 
-## Installing a validated release
-
-Pin an immutable OGM tag or full commit, never a moving branch:
-
-```ini
-lib_deps =
-  https://github.com/Cybergrany/ModbusRTUComm.git#1.2.0-ogm.1
-```
-
-The OGM-qualified package version and immutable release tag are both
-`1.2.0-ogm.1`. The tag resolves to the exact behavior-bearing commit exercised
-on hardware. Later documentation or branch-promotion commits do not redefine
-that release. `library.json` pins the reviewed ModbusADU Git commit.
-`library.properties` intentionally makes no mutable version-range dependency
-claim because that format cannot express the required commit. Do not override
-the dependency pair without repeating the release gates.
+MIT. See [LICENSE](LICENSE).

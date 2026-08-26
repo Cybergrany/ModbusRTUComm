@@ -1,8 +1,7 @@
-# Compatibility transport tests
+# Transport tests
 
-The native suite is a deterministic characterization of the transport replay
-from the immutable source tuple recorded in `ogm-fork-lock.json`. It uses a
-fake wrapping clock and timestamped `Stream`, not wall-clock sleeps.
+The native suite is a deterministic characterization of the current transport.
+It uses a fake wrapping clock and timestamped `Stream`, not wall-clock sleeps.
 
 Coverage includes:
 

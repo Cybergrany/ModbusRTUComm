@@ -101,10 +101,8 @@ local to a sketch or one source file is insufficient.
 and `512` entries on the supported mbed/GIGA build. Both are power-of-two
 profiles and are asserted by the production/native and embedded compile gates.
 
-Legacy OGM selected the larger non-mbed ring indirectly with `OGM_BRIDGE`.
-That application selector is intentionally not understood or aliased by this
-neutral package. A non-mbed bridge consumer that needs the established large
-profile must now set the explicit whole-build contract:
+A non-mbed gateway or high-latency consumer that needs the larger profile can
+select it explicitly for the whole build:
 
 ```ini
 build_flags =

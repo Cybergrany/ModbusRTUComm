@@ -13,7 +13,6 @@ Defining the macro only above an include in the sketch is insufficient because
 `Serial1` is used and the console is electrically/logically separate, adapt the
 example and choose the diagnostics policy deliberately.
 
-PlatformIO resolves the exact ModbusADU commit from this repository's
+PlatformIO resolves the declared ModbusADU dependency from this repository's
 `library.json`. Arduino Library Manager metadata cannot express a Git commit,
-so Arduino-IDE users must install the dependency revision recorded in
-`ogm-fork-lock.json` themselves.
+so Arduino IDE users should install a compatible ModbusADU revision explicitly.

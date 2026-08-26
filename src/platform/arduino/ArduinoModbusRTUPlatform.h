@@ -27,9 +27,9 @@
 #endif
 
 #if defined(ARDUINO_GIGA) && __has_include("../giga/GigaBufferedSerial.h")
-// Relative include is intentional. During package migration an application may
-// still expose an older header under platform/giga; the backend must bind to
-// the implementation shipped by this package, not include-path order.
+// The relative include is intentional: the backend must bind to the
+// implementation shipped by this package, not whichever similarly named
+// header appears first on the application's include path.
 #include "../giga/GigaBufferedSerial.h"
 #define MBUS_ARDUINO_PLATFORM_HAS_GIGA_BUFFERED_SERIAL 1
 #else

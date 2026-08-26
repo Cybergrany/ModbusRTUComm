@@ -161,9 +161,9 @@ void test_production_tu_exact_frames_order_timing_and_no_response_gate() {
   comm.begin(250000, SERIAL_8N1);
   comm.setTimeout(5U);
 
-  // The production native ABI footprint is frozen alongside the explicit ring
-  // profile. This detects accidental metrics/trace state or per-object backend
-  // storage being introduced into a release build.
+  // Keep the production native ABI footprint bounded alongside the explicit
+  // ring profile. This detects accidental metrics/trace state or per-object
+  // backend storage being introduced into a release build.
   TEST_ASSERT_EQUAL_UINT32(3776U, sizeof(ModbusRTUComm));
 
   arduino_test::clear_io_events();

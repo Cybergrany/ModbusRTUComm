@@ -152,11 +152,12 @@ all translation units that include the library.
 Run the deterministic native variants:
 
 ```sh
-PLATFORMIO_CORE_DIR=/home/dave/.platformio_core_portable pio test -e native_trace_on
-PLATFORMIO_CORE_DIR=/home/dave/.platformio_core_portable pio test -e native_trace_off
-PLATFORMIO_CORE_DIR=/home/dave/.platformio_core_portable pio test -e native_cxx11
-PLATFORMIO_CORE_DIR=/home/dave/.platformio_core_portable pio test -e native_failure_backend
-PLATFORMIO_CORE_DIR=/home/dave/.platformio_core_portable pio test -e production_profile
+export PLATFORMIO_CORE_DIR=/absolute/path/to/a/writable/platformio-core
+pio test -e native_trace_on
+pio test -e native_trace_off
+pio test -e native_cxx11
+pio test -e native_failure_backend
+pio test -e production_profile
 ```
 
 The suite freezes exact FC03/FC69 bytes and CRCs, no-local-echo behavior,

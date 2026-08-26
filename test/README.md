@@ -29,11 +29,12 @@ Coverage includes:
 Run all native gates:
 
 ```sh
-PLATFORMIO_CORE_DIR=/home/dave/.platformio_core_portable pio test -e native_trace_on
-PLATFORMIO_CORE_DIR=/home/dave/.platformio_core_portable pio test -e native_trace_off
-PLATFORMIO_CORE_DIR=/home/dave/.platformio_core_portable pio test -e native_cxx11
-PLATFORMIO_CORE_DIR=/home/dave/.platformio_core_portable pio test -e native_failure_backend
-PLATFORMIO_CORE_DIR=/home/dave/.platformio_core_portable pio test -e production_profile
+export PLATFORMIO_CORE_DIR=/absolute/path/to/a/writable/platformio-core
+pio test -e native_trace_on
+pio test -e native_trace_off
+pio test -e native_cxx11
+pio test -e native_failure_backend
+pio test -e production_profile
 ```
 
 `test/support/ModbusADU.*` is an unmodified test-only fixture of the immutable

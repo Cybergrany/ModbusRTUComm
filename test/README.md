@@ -33,8 +33,14 @@ pio test -e native_trace_on
 pio test -e native_trace_off
 pio test -e native_cxx11
 pio test -e native_failure_backend
+pio test -e native_giga_registry
 pio test -e production_profile
 ```
+
+The GIGA registry suite compiles the package-owned adapter against a minimal
+native platform seam. It covers direct and caller-placement construction,
+explicit admission failure, shared capacity, lookup, and destruction without
+attempting to model UART timing or mbed scheduling.
 
 `test/support/ModbusADU.*` is an unmodified test-only fixture of the immutable
 dependency revision used only by source-included characterization. The

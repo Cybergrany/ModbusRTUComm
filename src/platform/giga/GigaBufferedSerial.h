@@ -7,10 +7,15 @@
 #define MBUS_RTU_GIGA_BUFFERED_SERIAL_OWNER_MODBUS_RTU_COMM 1
 
 #include <Arduino.h>
+#include <cstddef>
+#include <cstdint>
 #include <chrono>
+#include <new>
 #include "mbed.h"
 #include "drivers/BufferedSerial.h"
 #include "GigaSerialFormat.h"
+
+class GigaBufferedSerialRegistry;
 
 class GigaBufferedSerial : public arduino::HardwareSerial {
 public:
@@ -161,6 +166,13 @@ public:
         return true;
     }
 
+    // Registry membership is required for the RTU readable-event and bounded
+    // transmit-drain hooks. This is deliberately observational: membership is
+    // derived from the registry rather than duplicated in each serial object.
+    bool registered() const noexcept {
+        return _contains(this);
+    }
+
     bool attachReadableCallback(ReadableCallback cb, void* ctx) {
         _readableCb = cb;
         _readableCbCtx = ctx;
@@ -215,6 +227,8 @@ public:
     }
 
 private:
+    friend class GigaBufferedSerialRegistry;
+
     static constexpr uint8_t kRegistryCap = 4;
 
     static GigaBufferedSerial** _registry() {
@@ -257,6 +271,19 @@ private:
         return nullptr;
     }
 
+    static bool _contains(const GigaBufferedSerial* instance) noexcept {
+        if (!instance) {
+            return false;
+        }
+        GigaBufferedSerial** slots = _registry();
+        for (uint8_t i = 0; i < kRegistryCap; ++i) {
+            if (slots[i] == instance) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     void _onReadableSigio() {
         ReadableCallback cb = _readableCb;
         if (cb) {
@@ -268,6 +295,126 @@ private:
     int _peekBuf = -1;
     ReadableCallback _readableCb = nullptr;
     void* _readableCbCtx = nullptr;
+};
+
+enum class GigaBufferedSerialRegistryStatus : uint8_t {
+    Ok = 0,
+    InvalidStorage,
+    MisalignedStorage,
+    Full
+};
+
+struct GigaBufferedSerialRegistryResult {
+    GigaBufferedSerialRegistryStatus status;
+    GigaBufferedSerial* serial;
+
+    GigaBufferedSerialRegistryResult(
+        GigaBufferedSerialRegistryStatus resultStatus =
+            GigaBufferedSerialRegistryStatus::InvalidStorage,
+        GigaBufferedSerial* resultSerial = nullptr) noexcept
+        : status(resultStatus), serial(resultSerial) {}
+
+    explicit operator bool() const noexcept {
+        return status == GigaBufferedSerialRegistryStatus::Ok && serial != nullptr;
+    }
+};
+
+// Optional construction facade for applications that generate serial
+// instances from configuration. It never allocates: the caller owns storage
+// and must destroy a successful result before that storage expires. Ordinary
+// direct GigaBufferedSerial construction remains supported and shares the same
+// registry/admission limit.
+class GigaBufferedSerialRegistry {
+public:
+    static constexpr std::size_t storageSize() noexcept {
+        return sizeof(GigaBufferedSerial);
+    }
+
+    static constexpr std::size_t storageAlignment() noexcept {
+        return alignof(GigaBufferedSerial);
+    }
+
+    static constexpr uint8_t capacity() noexcept {
+        return GigaBufferedSerial::kRegistryCap;
+    }
+
+    static uint8_t count() noexcept {
+        uint8_t result = 0;
+        GigaBufferedSerial** slots = GigaBufferedSerial::_registry();
+        for (uint8_t i = 0; i < GigaBufferedSerial::kRegistryCap; ++i) {
+            if (slots[i] != nullptr) {
+                ++result;
+            }
+        }
+        return result;
+    }
+
+    static bool contains(const GigaBufferedSerial* serial) noexcept {
+        return GigaBufferedSerial::_contains(serial);
+    }
+
+    static GigaBufferedSerial* find(arduino::Stream& stream) noexcept {
+        return GigaBufferedSerial::_fromStream(stream);
+    }
+
+    static GigaBufferedSerialRegistryResult constructAt(
+        void* storage,
+        std::size_t storageBytes,
+        PinName txPin,
+        PinName rxPin) {
+        const GigaBufferedSerialRegistryStatus storageStatus =
+            validateStorage(storage, storageBytes);
+        if (storageStatus != GigaBufferedSerialRegistryStatus::Ok) {
+            return GigaBufferedSerialRegistryResult(storageStatus, nullptr);
+        }
+
+        GigaBufferedSerial* serial =
+            new (storage) GigaBufferedSerial(txPin, rxPin);
+        if (!serial->registered()) {
+            serial->~GigaBufferedSerial();
+            return GigaBufferedSerialRegistryResult(
+                GigaBufferedSerialRegistryStatus::Full,
+                nullptr);
+        }
+        return GigaBufferedSerialRegistryResult(
+            GigaBufferedSerialRegistryStatus::Ok,
+            serial);
+    }
+
+    static GigaBufferedSerialRegistryResult constructAt(
+        void* storage,
+        std::size_t storageBytes,
+        int txPin,
+        int rxPin) {
+        return constructAt(
+            storage,
+            storageBytes,
+            digitalPinToPinName(txPin),
+            digitalPinToPinName(rxPin));
+    }
+
+    static bool destroyAt(GigaBufferedSerial*& serial) noexcept {
+        if (!serial || !serial->registered()) {
+            return false;
+        }
+        serial->~GigaBufferedSerial();
+        serial = nullptr;
+        return true;
+    }
+
+private:
+    static GigaBufferedSerialRegistryStatus validateStorage(
+        void* storage,
+        std::size_t storageBytes) noexcept {
+        if (!storage || storageBytes < sizeof(GigaBufferedSerial)) {
+            return GigaBufferedSerialRegistryStatus::InvalidStorage;
+        }
+        if ((reinterpret_cast<std::uintptr_t>(storage) %
+             alignof(GigaBufferedSerial)) != 0U) {
+            return GigaBufferedSerialRegistryStatus::MisalignedStorage;
+        }
+        return GigaBufferedSerialRegistryStatus::Ok;
+    }
 };
 
 #endif

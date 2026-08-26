@@ -40,6 +40,10 @@ Use this library when you are:
   virtual dispatch or allocation. See the
   [platform API](src/platform/README.md) and
   [Arduino backend](src/platform/arduino/README.md).
+- **Observable GIGA adapter admission.** GIGA applications may keep ordinary
+  direct serial construction or placement-construct configuration-driven
+  adapters through a zero-heap registry facade. Both paths share the same
+  identity registry used by readable-event and bounded-drain hooks.
 - **Optional metrics and diagnostics.** Detailed counters, timing snapshots,
   trace hooks, and RX-task stack data are compiled only when requested. See
   [configuration](#configuration).

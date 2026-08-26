@@ -1040,10 +1040,9 @@ void test_rx_ring_capacity_overflow_drop_and_index_wrap_are_bounded() {
       comm._rxTail.load(MBUS_MEM_RELAXED));
 }
 
-// OGM's validated transport does not require a transceiver-local echo before
-// reporting a completed write. Freeze both that policy and the exact classic
-// FC03 request bytes so migration cannot silently restore the historical seed's
-// echo-read loop or perturb CRC/byte order.
+// The transport does not require a transceiver-local echo before
+// reporting a completed write. Freeze both that policy and the exact FC03
+// request bytes so a change cannot add an echo-read loop or perturb CRC order.
 void test_exact_fc03_tx_bytes_succeed_without_local_echo() {
   resetTestClock();
   ScriptedStream serial;

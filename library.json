@@ -1,8 +1,8 @@
 {
   "$schema": "https://raw.githubusercontent.com/platformio/platformio-core/develop/platformio/assets/schema/library.json",
   "name": "ModbusRTUComm",
-  "version": "1.2.0-ogm.1",
-  "description": "Portable Modbus RTU framing, timing, recovery, stream ingress and RS485 direction handling maintained by OpenGameMaster.",
+  "version": "1.4.0",
+  "description": "Portable Modbus RTU framing, timing, recovery, stream ingress and RS485 direction handling.",
   "keywords": [
     "arduino",
     "modbus",
@@ -18,7 +18,7 @@
       "name": "C. M. Bulliner"
     },
     {
-      "name": "OpenGameMaster contributors",
+      "name": "Cybergrany contributors",
       "maintainer": true
     }
   ],

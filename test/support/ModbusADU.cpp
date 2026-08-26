@@ -1,5 +1,5 @@
 // Unmodified test fixture from CMB27/ModbusADU at the dependency revision
-// pinned in ogm-fork-lock.json. Distributed under its MIT license.
+// pinned in library.json. Distributed under its MIT license.
 #include "ModbusADU.h"
 
 void ModbusADU::setTransactionId(uint16_t transactionId) {

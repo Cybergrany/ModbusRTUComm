@@ -1,28 +1,33 @@
 # ModbusRTUComm
 
-This repository is a provenance-preserving fork of
-[`CMB27/ModbusRTUComm`](https://github.com/CMB27/ModbusRTUComm). It provides the
-RTU transport used by the OpenGameMaster compatibility line: frame send and
-receive mechanics, timing boundaries, response classification, recovery, and
-optional static platform backends around a caller-owned Arduino `Stream`.
+This is the OpenGameMaster-maintained, provenance-preserving fork of
+[`CMB27/ModbusRTUComm`](https://github.com/CMB27/ModbusRTUComm). It keeps the
+small Arduino `Stream` transport API while adding production RTU framing,
+recovery, explicit no-response ordering, observability, and portable static
+platform bindings required by sustained multidrop networks.
 
 > [!IMPORTANT]
 > The exact replay at `1.2.0-ogm.1` completed its OGM consumer builds and
 > physical GIGA/RS485 checkpoints with unchanged deployed slave firmware on
 > 2026-08-26. Consume that immutable tag or its full commit, not a moving
-> branch. `main` remains the unmodified current CMB27 line; compatibility work
-> exists only on `ogm/compat` and reviewed branches based on it.
+> branch. This repository's `main` is the maintained OGM fork; later CMB27
+> development remains available through the `upstream` remote and is reconciled
+> only as an explicit, test-gated behavior change.
 
-## Repository lines
+## What this fork adds
 
-| Ref | Purpose |
-| --- | --- |
-| `main` | Mirrors current `CMB27/ModbusRTUComm` without OGM changes. |
-| `ogm/compat` | Historical CMB27 import lineage plus reviewed OGM compatibility replays. |
+- continuous buffered ingress with T1.5/T3.5-aware extraction and recovery;
+- deterministic DE/write/drain/delay ordering and receive-safe initialization;
+- explicit broadcast/FC69 no-response and next-transmit gates;
+- late, stray, duplicate, overflow and terminal-error classification;
+- one-shot scheduling gaps without changing base RTU timing;
+- optional allocation-free metrics, trace, and RX event-task support; and
+- compile-time platform bindings, including the tested Arduino GIGA/mbed path.
 
-Never merge or rebase `main` into `ogm/compat` as part of packaging. Newer
-upstream reconciliation is a separate behavior migration with its own tests.
-Exact branch points, source hashes, replay commits, and gate status are in
+The maintained line descends from the exact historical CMB27 source imported
+by OGM, so Git history shows each replayed improvement on top of that original
+implementation. Do not mechanically merge a newer upstream redesign into this
+line. Exact branch points, source hashes, replay commits, and gate status are in
 [`OGM_FORK_PROVENANCE.md`](OGM_FORK_PROVENANCE.md) and
 [`ogm-fork-lock.json`](ogm-fork-lock.json).
 
@@ -103,7 +108,7 @@ against the historical seed while selecting these APIs only when available.
 
 `MBUS_RTU_COMM_HAS_NO_RESPONSE_GATE=1` separately asserts that unit-zero
 standard writes and FC69 complete without `readAdu()` while retaining their
-next-TX turnaround boundary. Higher-level compatibility forks should require
+next-TX turnaround boundary. Higher-level libraries should require
 this capability rather than infer it from the one-shot-gap API.
 
 ## Platform binding
@@ -174,19 +179,19 @@ run the exact consumer dependency tree. Native passing results do not prove
 UART interrupt latency, drain duration, mbed scheduling, RS485 electrical
 turnaround, or physical compatibility with deployed firmware.
 
-## Installing a validated compatibility release
+## Installing a validated release
 
-Pin an immutable compatibility tag or full commit, never a moving branch:
+Pin an immutable OGM tag or full commit, never a moving branch:
 
 ```ini
 lib_deps =
   https://github.com/Cybergrany/ModbusRTUComm.git#1.2.0-ogm.1
 ```
 
-The OGM-qualified package version and immutable compatibility tag are both
+The OGM-qualified package version and immutable release tag are both
 `1.2.0-ogm.1`. The tag resolves to the exact behavior-bearing commit exercised
-on hardware. Later documentation commits on `ogm/compat` do not redefine that
-release. `library.json` pins the reviewed ModbusADU Git commit.
+on hardware. Later documentation or branch-promotion commits do not redefine
+that release. `library.json` pins the reviewed ModbusADU Git commit.
 `library.properties` intentionally makes no mutable version-range dependency
 claim because that format cannot express the required commit. Do not override
-the dependency pair without repeating the compatibility gates.
+the dependency pair without repeating the release gates.

@@ -13,7 +13,8 @@ Coverage includes:
 - T1.5/T3.5 boundaries, maximum legal FC03 response timing, and one-frame TX
   operation budget;
 - first-byte timeout, late grace, duplicate/stray recovery, CRC/frame error
-  precedence, buffer cleanup, and micros rollover;
+  precedence, buffer cleanup, micros rollover, stale queued timestamps after
+  the signed half-range, and the transaction-wide recovery escape;
 - one-shot pre/post zero/maximum/consumption behavior on success and failure;
 - no-response/broadcast gates and preservation across consecutive requests;
 - RX-ring capacity, overflow counter, drop, FIFO order, index wrap, and profile
@@ -54,7 +55,8 @@ package-relative form. This checks include ownership; the consumer must still
 remove/exclude any second global `GigaBufferedSerial` definition to avoid ODR
 violation.
 
-These gates intentionally detect logical waits and platform-operation growth,
-but they are not cycle benchmarks. GIGA/mbed object size, UART drain behavior,
-thread scheduling, transceiver turnaround, and electrical bus idle remain
-embedded compile and hardware gates.
+These gates intentionally detect logical waits, platform-operation growth, and
+cooperative-yield growth on the normal transaction path, but they are not cycle
+benchmarks. GIGA/mbed object size, UART drain behavior, thread scheduling,
+transceiver turnaround, and electrical bus idle remain embedded compile and
+hardware gates.

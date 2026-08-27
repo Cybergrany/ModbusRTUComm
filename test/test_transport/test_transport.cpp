@@ -268,10 +268,23 @@ void setTargetedBroadcastWriteMultiRegReq(ModbusADU& req,
 void resetTestClock() {
   arduino_test::reset_time(0);
   arduino_test::set_micros_step(8);
+  arduino_test::yield_call_count() = 0;
   arduino_test::clear_io_events();
 #if MBUS_RTU_PLATFORM_TRACE
   capturedPlatformTrace().clear();
 #endif
+}
+
+uint32_t streamOperationCount(
+    const std::vector<ScriptedStream::Operation>& operations,
+    ScriptedStream::Operation expected) {
+  uint32_t count = 0;
+  for (ScriptedStream::Operation operation : operations) {
+    if (operation == expected) {
+      ++count;
+    }
+  }
+  return count;
 }
 
 std::vector<arduino_test::IoEvent> txLifecycleEvents(int8_t dePin) {
@@ -360,6 +373,48 @@ void test_high_baud_uses_spec_fixed_timers_without_changing_8n1_wire_time() {
   TEST_ASSERT_EQUAL_UINT32(204264U, comm._maxFrameReceiveUs);
 }
 
+void test_transaction_budget_is_wrap_safe_and_preserves_receive_tail() {
+  const RxTimingBudget normal =
+      make_rx_timing_budget(250000U, 8000U, 5563676U);
+  TEST_ASSERT_EQUAL_UINT32(250000U, normal.read_timeout_us);
+  TEST_ASSERT_EQUAL_UINT32(5821676U, normal.active_escape_us);
+
+  const RxTimingBudget extreme =
+      make_rx_timing_budget(0xFFFFFFFFUL, 8000U, 5563676U);
+  TEST_ASSERT_EQUAL_UINT32(kMaxWrapSafeRxIntervalUs,
+                           extreme.active_escape_us);
+  TEST_ASSERT_EQUAL_UINT32(
+      kMaxWrapSafeRxIntervalUs - 8000U - 5563676U,
+      extreme.read_timeout_us);
+
+  const uint32_t startUs = 0xFFFFFF00UL;
+  TEST_ASSERT_FALSE(rx_interval_elapsed(startUs, 0x0000002BUL, 300U));
+  TEST_ASSERT_TRUE(rx_interval_elapsed(startUs, 0x0000002CUL, 300U));
+
+  const uint32_t boundaryStartUs = 0xFFF00000UL;
+  TEST_ASSERT_FALSE(rx_interval_elapsed(
+      boundaryStartUs,
+      boundaryStartUs + normal.active_escape_us - 1U,
+      normal.active_escape_us));
+  TEST_ASSERT_TRUE(rx_interval_elapsed(
+      boundaryStartUs,
+      boundaryStartUs + normal.active_escape_us,
+      normal.active_escape_us));
+
+  // Current bytes retain their actual timestamp; slightly prefetched bytes are
+  // clamped only to readAdu() entry; genuinely stale/ambiguous bytes use now.
+  TEST_ASSERT_EQUAL_UINT32(
+      10200U,
+      normalize_rx_event_timestamp(10000U, 10500U, 10200U, 1000U));
+  TEST_ASSERT_EQUAL_UINT32(
+      10000U,
+      normalize_rx_event_timestamp(10000U, 10500U, 9900U, 1000U));
+  TEST_ASSERT_EQUAL_UINT32(
+      2400000000UL,
+      normalize_rx_event_timestamp(
+          2400000000UL, 2400000000UL, 1000U, 1000000U));
+}
+
 // FC03 permits 125 registers, producing a 255-byte RTU response. The response
 // may start just inside the application timeout but must not inherit that same
 // timeout as a whole-frame deadline.
@@ -381,6 +436,74 @@ void test_maximum_fc03_response_completes_after_response_start_timeout() {
   TEST_ASSERT_EQUAL_UINT8(MODBUS_RTU_COMM_SUCCESS, err);
   TEST_ASSERT_EQUAL_UINT16(response.size(), req.getRtuLen());
   TEST_ASSERT_TRUE(comm.debugInfo().last_read_total_us > 4000U);
+}
+
+// At 1200 baud the maximum FC03 response lasts over two seconds on wire. Let
+// its first byte arrive inside late grace to exercise the longest legal path:
+// response-start timeout + late window + the complete frame envelope.
+void test_low_baud_maximum_fc03_response_survives_late_start_and_full_frame() {
+  resetTestClock();
+  arduino_test::set_micros_step(100U);
+  ScriptedStream serial;
+  ModbusRTUComm comm(serial);
+  comm.begin(1200, SERIAL_8N1);
+  comm.setTimeout(4);
+
+  ModbusADU req;
+  setReadReq(req, 0x28, 0x03, 0, 125);
+  const auto response = makeRegisterReadResponse(0x28, 125);
+  TEST_ASSERT_EQUAL_UINT16(255U, response.size());
+  TEST_ASSERT_EQUAL_UINT32(8334U, comm._charTimeUs);
+  TEST_ASSERT_EQUAL_UINT32(5563676U, comm._maxFrameReceiveUs);
+
+  const uint32_t lateGraceUs = comm._computeLateGraceUs();
+  const uint32_t firstUs = arduino_test::now_us() + 4000U + lateGraceUs - 500U;
+  serial.pushBytes(response, firstUs, comm._charTimeUs);
+  const uint64_t readStartUs = arduino_test::clock_us();
+
+  TEST_ASSERT_EQUAL_UINT8(MODBUS_RTU_COMM_SUCCESS, comm.readAdu(req));
+  TEST_ASSERT_EQUAL_UINT16(response.size(), req.getRtuLen());
+  TEST_ASSERT_TRUE(comm.debugInfo().late_match_after_timeout_count >= 1U);
+  TEST_ASSERT_GREATER_THAN_UINT64(2000000ULL,
+                                  arduino_test::clock_us() - readStartUs);
+  TEST_ASSERT_LESS_THAN_UINT64(
+      static_cast<uint64_t>(4000U + lateGraceUs + comm._maxFrameReceiveUs),
+      arduino_test::clock_us() - readStartUs);
+}
+
+// Exercise the same maximum response at 300 baud, below the usual Modbus RTU
+// deployment floor. This is deliberately conservative: if a platform accepts
+// that baud, the transaction cap still leaves the entire legal frame intact.
+void test_300_baud_maximum_fc03_response_is_not_preempted() {
+  resetTestClock();
+  arduino_test::set_micros_step(500U);
+  ScriptedStream serial;
+  ModbusRTUComm comm(serial);
+  comm.begin(300, SERIAL_8N1);
+  comm.setTimeout(4);
+
+  ModbusADU req;
+  setReadReq(req, 0x29, 0x03, 0, 125);
+  const auto response = makeRegisterReadResponse(0x29, 125);
+  TEST_ASSERT_EQUAL_UINT16(255U, response.size());
+  TEST_ASSERT_EQUAL_UINT32(33334U, comm._charTimeUs);
+  TEST_ASSERT_EQUAL_UINT32(22253676U, comm._maxFrameReceiveUs);
+
+  const uint32_t lateGraceUs = comm._computeLateGraceUs();
+  const uint32_t firstUs =
+      arduino_test::now_us() + 4000U + lateGraceUs - 2000U;
+  serial.pushBytes(response, firstUs, comm._charTimeUs);
+  const uint64_t readStartUs = arduino_test::clock_us();
+
+  TEST_ASSERT_EQUAL_UINT8(MODBUS_RTU_COMM_SUCCESS, comm.readAdu(req));
+  TEST_ASSERT_EQUAL_UINT16(response.size(), req.getRtuLen());
+  TEST_ASSERT_TRUE(comm.debugInfo().late_match_after_timeout_count >= 1U);
+  TEST_ASSERT_GREATER_THAN_UINT64(8000000ULL,
+                                  arduino_test::clock_us() - readStartUs);
+  TEST_ASSERT_LESS_THAN_UINT64(
+      static_cast<uint64_t>(4000U + lateGraceUs + comm._maxFrameReceiveUs),
+      arduino_test::clock_us() - readStartUs);
+  TEST_ASSERT_EQUAL_UINT32(0U, comm.debugInfo().transaction_escape_count);
 }
 
 // The fixed high-baud T1.5 recommendation is also the parser boundary: an
@@ -546,6 +669,221 @@ void test_stale_rx_marker_after_full_wrap_does_not_activate_rx() {
   TEST_ASSERT_EQUAL_UINT8(MODBUS_RTU_COMM_TIMEOUT, err);
   TEST_ASSERT_EQUAL_UINT32(1, comm.debugInfo().timeout_no_rx_count);
   TEST_ASSERT_EQUAL_UINT32(0, comm.debugInfo().timeout_with_rx_count);
+}
+
+// Defensive direct-read case: maintained master callers normally drain in
+// writeAdu() first, but a nonstandard caller can expose an entry retained for
+// over forty minutes. Its wrapped timestamp must not seed future RX deadlines.
+void test_stale_queued_fragment_after_forty_minutes_is_bounded() {
+  resetTestClock();
+  ScriptedStream serial;
+  ModbusRTUComm comm(serial);
+  comm.begin(250000, SERIAL_8N1);
+  comm.setTimeout(1);
+
+  TEST_ASSERT_TRUE(comm._pushRxByte(0x16U, 1000U));
+  arduino_test::reset_time(2400000000ULL);
+  arduino_test::set_micros_step(1000U);
+  const uint64_t startUs = arduino_test::clock_us();
+
+  ModbusADU req;
+  setReadReq(req, 0x16, 0x03, 0, 1);
+  TEST_ASSERT_EQUAL_UINT8(MODBUS_RTU_COMM_FRAME_ERROR, comm.readAdu(req));
+  TEST_ASSERT_EQUAL_UINT16(0U, req.getRtuLen());
+  TEST_ASSERT_LESS_THAN_UINT64(
+      static_cast<uint64_t>(comm._maxFrameReceiveUs),
+      arduino_test::clock_us() - startUs);
+  TEST_ASSERT_EQUAL_UINT32(0U, comm.debugInfo().transaction_escape_count);
+}
+
+// The same stale-entry defense must survive a full micros() wrap and retain
+// the existing frame-over-CRC terminal precedence for a corrupt complete ADU.
+void test_stale_corrupt_frame_after_full_wrap_keeps_error_precedence() {
+  resetTestClock();
+  ScriptedStream serial;
+  ModbusRTUComm comm(serial);
+  comm.begin(250000, SERIAL_8N1);
+  comm.setTimeout(1);
+
+  std::vector<uint8_t> bad = makeFrame(0x31, 0x03, {0x02, 0x12, 0x34});
+  bad.back() ^= 0x01U;
+  uint32_t eventUs = 1000U;
+  for (uint8_t value : bad) {
+    TEST_ASSERT_TRUE(comm._pushRxByte(value, eventUs));
+    eventUs += 40U;
+  }
+
+  arduino_test::reset_time(0x100000000ULL + 2400000000ULL);
+  arduino_test::set_micros_step(1000U);
+  const uint64_t startUs = arduino_test::clock_us();
+  ModbusADU req;
+  setReadReq(req, 0x31, 0x03, 0, 1);
+
+  TEST_ASSERT_EQUAL_UINT8(MODBUS_RTU_COMM_FRAME_ERROR, comm.readAdu(req));
+  TEST_ASSERT_EQUAL_UINT16(0U, req.getRtuLen());
+  TEST_ASSERT_LESS_THAN_UINT64(
+      static_cast<uint64_t>(comm._maxFrameReceiveUs),
+      arduino_test::clock_us() - startUs);
+  TEST_ASSERT_EQUAL_UINT32(0U, comm.debugInfo().transaction_escape_count);
+}
+
+// Force only the defensive budget seam to expire, starting immediately before
+// micros() wrap. This proves the cap itself is elapsed-time based and observable
+// without changing normal timeout/error semantics.
+void test_transaction_escape_is_observable_across_micros_wrap() {
+  resetTestClock();
+  ScriptedStream serial;
+  ModbusRTUComm comm(serial);
+  comm.begin(250000, SERIAL_8N1);
+  comm.setTimeout(1);
+  comm._maxFrameReceiveUs = 0U;
+
+  arduino_test::reset_time(0xFFFFFF00ULL);
+  arduino_test::set_micros_step(100U);
+  ModbusADU req;
+  setReadReq(req, 0x15, 0x03, 0, 1);
+
+  TEST_ASSERT_EQUAL_UINT8(MODBUS_RTU_COMM_TIMEOUT, comm.readAdu(req));
+  TEST_ASSERT_EQUAL_UINT32(1U, comm.debugInfo().transaction_escape_count);
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(ModbusRTUComm::RxTxnState::LATE_WINDOW),
+      comm.debugInfo().last_transaction_escape_state);
+  TEST_ASSERT_GREATER_OR_EQUAL_UINT32(
+      3000U, comm.debugInfo().last_transaction_escape_us);
+  TEST_ASSERT_EQUAL_UINT32(
+      3000U, comm.debugInfo().last_transaction_escape_budget_us);
+  TEST_ASSERT_EQUAL_UINT16(0U,
+                           comm.debugInfo().last_transaction_escape_rx_count);
+}
+
+// A busy line can keep producing complete but unrelated candidates forever.
+// The transaction cap must be checked after each classified non-match, not only
+// when the extractor reports no work. Keep enough real Stream/extractor input
+// queued that the escape is observably taken before the candidate burst ends.
+void test_continuous_stray_frames_cannot_evade_transaction_escape() {
+  resetTestClock();
+  arduino_test::set_micros_step(50U);
+  ScriptedStream serial;
+  ModbusRTUComm comm(serial);
+  comm.begin(250000, SERIAL_8N1);
+  comm.setTimeout(1);
+  comm._maxFrameReceiveUs = 12000U;
+
+  const auto stray = makeFrame(0x16, 0x03, {0x02, 0x12, 0x34});
+  const uint32_t readyUs = arduino_test::now_us();
+  for (uint8_t frameIndex = 0; frameIndex < 36U; ++frameIndex) {
+    serial.pushBytes(stray, readyUs, 0U);
+  }
+
+  ModbusADU req;
+  setReadReq(req, 0x15, 0x03, 0, 1);
+  const uint64_t startUs = arduino_test::clock_us();
+  TEST_ASSERT_EQUAL_UINT8(MODBUS_RTU_COMM_TIMEOUT, comm.readAdu(req));
+
+  TEST_ASSERT_EQUAL_UINT32(1U, comm.debugInfo().transaction_escape_count);
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(ModbusRTUComm::RxTxnState::PROCESS_FRAME),
+      comm.debugInfo().last_transaction_escape_state);
+  TEST_ASSERT_GREATER_THAN_UINT16(
+      0U, comm.debugInfo().last_transaction_escape_rx_count);
+  TEST_ASSERT_TRUE(comm.debugInfo().recovered_stray_count >= 1U);
+  TEST_ASSERT_TRUE(comm._rxEmpty());
+  TEST_ASSERT_LESS_THAN_UINT64(
+      static_cast<uint64_t>(15000U + MBUS_RTU_DRAIN_ESCAPE_US),
+      arduino_test::clock_us() - startUs);
+}
+
+// The same busy-candidate escape must not flatten accumulated parser failures
+// into a timeout. Corrupt matching-shaped frames retain frame-over-CRC terminal
+// precedence even when H, rather than a quiet line, ends classification.
+void test_continuous_corrupt_frames_escape_with_error_precedence() {
+  resetTestClock();
+  arduino_test::set_micros_step(50U);
+  ScriptedStream serial;
+  ModbusRTUComm comm(serial);
+  comm.begin(250000, SERIAL_8N1);
+  comm.setTimeout(1);
+  comm._maxFrameReceiveUs = 12000U;
+
+  std::vector<uint8_t> corrupt =
+      makeFrame(0x15, 0x03, {0x02, 0x12, 0x34});
+  corrupt.back() ^= 0x01U;
+  const uint32_t readyUs = arduino_test::now_us();
+  // Seed an abandoned fragment before the corrupt burst. The parser observes
+  // both framing and CRC damage, so the final result must retain frame > CRC >
+  // timeout precedence when H fires.
+  TEST_ASSERT_TRUE(comm._pushRxByte(0x15U, readyUs - 10000U));
+  for (uint8_t frameIndex = 0; frameIndex < 36U; ++frameIndex) {
+    serial.pushBytes(corrupt, readyUs, 0U);
+  }
+
+  ModbusADU req;
+  setReadReq(req, 0x15, 0x03, 0, 1);
+  TEST_ASSERT_EQUAL_UINT8(MODBUS_RTU_COMM_FRAME_ERROR, comm.readAdu(req));
+
+  TEST_ASSERT_EQUAL_UINT16(0U, req.getRtuLen());
+  TEST_ASSERT_EQUAL_UINT32(1U, comm.debugInfo().transaction_escape_count);
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(ModbusRTUComm::RxTxnState::PROCESS_FRAME),
+      comm.debugInfo().last_transaction_escape_state);
+  TEST_ASSERT_GREATER_THAN_UINT16(
+      0U, comm.debugInfo().last_transaction_escape_rx_count);
+  TEST_ASSERT_TRUE(comm.debugInfo().frame_err_count >= 1U);
+  TEST_ASSERT_TRUE(comm._rxEmpty());
+}
+
+// PROCESS_FRAME classifies an already-extracted candidate before consulting H.
+// Advance the fake clock past H between extraction and classification and prove
+// a valid matching response still succeeds instead of becoming an escape.
+void test_matching_candidate_at_transaction_boundary_wins_over_escape() {
+  resetTestClock();
+  ScriptedStream serial;
+  ModbusRTUComm comm(serial);
+  comm.begin(250000, SERIAL_8N1);
+  comm.setTimeout(1);
+  comm._maxFrameReceiveUs = 0U;
+
+  ModbusADU req;
+  setReadReq(req, 0x15, 0x03, 0, 1);
+  const auto response = makeFrame(0x15, 0x03, {0x02, 0x12, 0x34});
+  uint32_t timestampUs = arduino_test::now_us();
+  for (uint8_t value : response) {
+    TEST_ASSERT_TRUE(comm._pushRxByte(value, timestampUs));
+    timestampUs += 40U;
+  }
+  arduino_test::set_micros_step(2000U);
+
+  TEST_ASSERT_EQUAL_UINT8(MODBUS_RTU_COMM_SUCCESS, comm.readAdu(req));
+  TEST_ASSERT_EQUAL_UINT16(response.size(), req.getRtuLen());
+  TEST_ASSERT_EQUAL_UINT32(0U, comm.debugInfo().transaction_escape_count);
+}
+
+// Standard Master ordering drains old ingress before TX. Keep this separate
+// from the direct-read defense so a stale ring cannot silently become a common
+// transaction-cap path.
+void test_write_then_read_drains_stale_ring_without_transaction_escape() {
+  resetTestClock();
+  ScriptedStream serial;
+  ModbusRTUComm comm(serial);
+  comm.begin(250000, SERIAL_8N1);
+  comm.setTimeout(1);
+
+  TEST_ASSERT_TRUE(comm._pushRxByte(0x15U, 1000U));
+  arduino_test::reset_time(2400000000ULL);
+  arduino_test::set_micros_step(100U);
+
+  ModbusADU req;
+  setReadReq(req, 0x15, 0x03, 0, 1);
+  TEST_ASSERT_TRUE(comm.writeAdu(req));
+  TEST_ASSERT_TRUE(comm._rxEmpty());
+  const uint64_t readStartUs = arduino_test::clock_us();
+  TEST_ASSERT_EQUAL_UINT8(MODBUS_RTU_COMM_TIMEOUT, comm.readAdu(req));
+
+  TEST_ASSERT_EQUAL_UINT32(1U, comm.debugInfo().timeout_no_rx_count);
+  TEST_ASSERT_EQUAL_UINT32(0U, comm.debugInfo().timeout_with_rx_count);
+  TEST_ASSERT_EQUAL_UINT32(0U, comm.debugInfo().transaction_escape_count);
+  TEST_ASSERT_LESS_THAN_UINT64(20000ULL,
+                               arduino_test::clock_us() - readStartUs);
 }
 
 // A real first byte just before the first-byte deadline must still extend the
@@ -1120,6 +1458,42 @@ void test_empty_line_tx_stays_within_single_frame_wait_budget() {
       static_cast<uint64_t>(comm._frameTimeout) + 1000ULL, elapsedUs);
 }
 
+// A prefetched normal response has a fixed transport hot path. The safety
+// checks are arithmetic-only and must not add Stream calls or cooperative
+// yields to that path.
+void test_normal_prefetched_read_preserves_serial_calls_and_yield_count() {
+  resetTestClock();
+  ScriptedStream serial;
+  ModbusRTUComm comm(serial);
+  comm.begin(250000, SERIAL_8N1);
+  comm.setTimeout(4);
+
+  ModbusADU request;
+  setReadReq(request, 0x32, 0x03, 0, 1);
+  const auto response = makeFrame(0x32, 0x03, {0x02, 0xBE, 0xEF});
+  uint32_t timestampUs = arduino_test::now_us() + 100U;
+  for (uint8_t value : response) {
+    TEST_ASSERT_TRUE(comm._pushRxByte(value, timestampUs));
+    timestampUs += 40U;
+  }
+  arduino_test::advance_us(5000U);
+  serial.clear();
+  arduino_test::yield_call_count() = 0U;
+
+  TEST_ASSERT_EQUAL_UINT8(MODBUS_RTU_COMM_SUCCESS, comm.readAdu(request));
+  const std::vector<ScriptedStream::Operation>& operations = serial.operations();
+  TEST_ASSERT_EQUAL_UINT32(
+      4U, streamOperationCount(operations, ScriptedStream::Operation::Available));
+  TEST_ASSERT_EQUAL_UINT32(
+      0U, streamOperationCount(operations, ScriptedStream::Operation::Read));
+  TEST_ASSERT_EQUAL_UINT32(
+      0U, streamOperationCount(operations, ScriptedStream::Operation::Write));
+  TEST_ASSERT_EQUAL_UINT32(
+      0U, streamOperationCount(operations, ScriptedStream::Operation::Flush));
+  TEST_ASSERT_EQUAL_UINT32(0U, arduino_test::yield_call_count());
+  TEST_ASSERT_EQUAL_UINT32(0U, comm.debugInfo().transaction_escape_count);
+}
+
 #if MBUS_RTU_PLATFORM_TRACE
 void test_platform_ingress_delegation_preserves_byte_call_order_and_trace() {
   resetTestClock();
@@ -1251,7 +1625,10 @@ void test_success_state_trace_preserves_transaction_transition_order() {
 void run_modbus_rtu_transport_tests() {
   // Ordered to move from framing fundamentals to edge conditions.
   RUN_TEST(test_high_baud_uses_spec_fixed_timers_without_changing_8n1_wire_time);
+  RUN_TEST(test_transaction_budget_is_wrap_safe_and_preserves_receive_tail);
   RUN_TEST(test_maximum_fc03_response_completes_after_response_start_timeout);
+  RUN_TEST(test_low_baud_maximum_fc03_response_survives_late_start_and_full_frame);
+  RUN_TEST(test_300_baud_maximum_fc03_response_is_not_preempted);
   RUN_TEST(test_high_baud_t15_boundary_is_inclusive);
   RUN_TEST(test_high_baud_gap_above_t15_is_rejected_then_resyncs);
   RUN_TEST(test_stray_then_expected_frame_is_accepted);
@@ -1259,6 +1636,13 @@ void run_modbus_rtu_transport_tests() {
   RUN_TEST(test_timeout_without_response_reports_timeout);
   RUN_TEST(test_stale_rx_marker_after_signed_half_range_does_not_activate_rx);
   RUN_TEST(test_stale_rx_marker_after_full_wrap_does_not_activate_rx);
+  RUN_TEST(test_stale_queued_fragment_after_forty_minutes_is_bounded);
+  RUN_TEST(test_stale_corrupt_frame_after_full_wrap_keeps_error_precedence);
+  RUN_TEST(test_transaction_escape_is_observable_across_micros_wrap);
+  RUN_TEST(test_continuous_stray_frames_cannot_evade_transaction_escape);
+  RUN_TEST(test_continuous_corrupt_frames_escape_with_error_precedence);
+  RUN_TEST(test_matching_candidate_at_transaction_boundary_wins_over_escape);
+  RUN_TEST(test_write_then_read_drains_stale_ring_without_transaction_escape);
   RUN_TEST(test_partial_response_near_first_byte_timeout_completes);
   RUN_TEST(test_incomplete_response_stays_within_bounded_wait_and_drain);
   RUN_TEST(test_timeout_with_rx_activity_is_classified);
@@ -1280,6 +1664,7 @@ void run_modbus_rtu_transport_tests() {
   RUN_TEST(test_exact_fc69_no_reply_bytes_and_crc_are_stable);
   RUN_TEST(test_crc_corruption_uses_frame_precedence_and_clears_output_adu);
   RUN_TEST(test_empty_line_tx_stays_within_single_frame_wait_budget);
+  RUN_TEST(test_normal_prefetched_read_preserves_serial_calls_and_yield_count);
 #if MBUS_RTU_PLATFORM_TRACE
   RUN_TEST(test_platform_ingress_delegation_preserves_byte_call_order_and_trace);
   RUN_TEST(test_platform_tx_delegation_preserves_write_flush_and_trace_order);

@@ -211,6 +211,9 @@ class ModbusRTUComm {
     ~ModbusRTUComm();
 
     void begin(unsigned long baud, uint32_t config = SERIAL_8N1);
+    // Response-start timeout in milliseconds. readAdu() bounds extreme values
+    // internally so its complete timeout + late + frame window remains safe
+    // across micros() rollover.
     void setTimeout(unsigned long timeout);
     // One-shot pre-transmit gap (in microseconds) for the next transaction.
     void setPreTxGapUsOnce(unsigned long extraGapUs);
@@ -273,6 +276,11 @@ class ModbusRTUComm {
       uint32_t drain_escape_count = 0;
       uint32_t last_drain_escape_us = 0;
       uint16_t last_drain_escape_rx_count = 0;
+      uint32_t transaction_escape_count = 0;
+      uint32_t last_transaction_escape_us = 0;
+      uint32_t last_transaction_escape_budget_us = 0;
+      uint16_t last_transaction_escape_rx_count = 0;
+      uint8_t last_transaction_escape_state = 0;
 
       // State machine diagnostics (C2+ refactor instrumentation).
       uint32_t state_transition_count = 0;

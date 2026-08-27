@@ -38,8 +38,57 @@ static inline bool timestamp_not_before(uint32_t referenceUs, uint32_t sampleUs)
   return static_cast<int32_t>(sampleUs - referenceUs) >= 0;
 }
 
-static inline uint32_t normalize_timestamp_floor(uint32_t floorUs, uint32_t sampleUs) {
-  return timestamp_not_before(floorUs, sampleUs) ? sampleUs : floorUs;
+// Every absolute deadline in the RX state machine is compared through a signed
+// 32-bit delta. Keep one transaction strictly inside that unambiguous half of
+// the micros() range, including the late-response and maximum-frame windows.
+static const uint32_t kMaxWrapSafeRxIntervalUs = 0x7FFFFFFFUL;
+
+struct RxTimingBudget {
+  uint32_t read_timeout_us;
+  uint32_t active_escape_us;
+
+  RxTimingBudget(uint32_t readTimeoutUs, uint32_t activeEscapeUs)
+      : read_timeout_us(readTimeoutUs), active_escape_us(activeEscapeUs) {}
+};
+
+static inline RxTimingBudget make_rx_timing_budget(uint32_t requestedReadUs,
+                                                   uint32_t lateGraceUs,
+                                                   uint32_t maxFrameReceiveUs) {
+  // H = response-start wait + late acceptance + the conservative maximum RTU
+  // frame envelope (which already includes T3.5). DRAIN is bounded separately.
+  const uint64_t receiveTailWide =
+      static_cast<uint64_t>(lateGraceUs) +
+      static_cast<uint64_t>(maxFrameReceiveUs);
+  const uint32_t receiveTailUs =
+      receiveTailWide > kMaxWrapSafeRxIntervalUs
+          ? kMaxWrapSafeRxIntervalUs
+          : static_cast<uint32_t>(receiveTailWide);
+  const uint32_t maxReadUs = kMaxWrapSafeRxIntervalUs - receiveTailUs;
+  const uint32_t effectiveReadUs = min_val(requestedReadUs, maxReadUs);
+  return RxTimingBudget(effectiveReadUs, effectiveReadUs + receiveTailUs);
+}
+
+static inline bool rx_interval_elapsed(uint32_t startUs,
+                                       uint32_t nowUs,
+                                       uint32_t durationUs) {
+  return static_cast<uint32_t>(nowUs - startUs) >= durationUs;
+}
+
+static inline uint32_t normalize_rx_event_timestamp(uint32_t transactionStartUs,
+                                                    uint32_t observedNowUs,
+                                                    uint32_t eventUs,
+                                                    uint32_t maxTrustedAgeUs) {
+  // Once an entry is older than the entire transaction window, its wrapped
+  // uint32_t timestamp is ambiguous: signed ordering can mistake it for a
+  // future byte and seed a deadline in the next micros() cycle. Keep parsing
+  // the queued byte for compatibility, but anchor its receive windows at the
+  // observation time. Genuine prefetched/current bytes retain their timestamp.
+  if (static_cast<uint32_t>(observedNowUs - eventUs) > maxTrustedAgeUs) {
+    return observedNowUs;
+  }
+  return timestamp_not_before(transactionStartUs, eventUs)
+             ? eventUs
+             : transactionStartUs;
 }
 
 static inline uint32_t elapsed_us_or_zero(uint32_t startUs, uint32_t endUs) {
@@ -941,13 +990,23 @@ ModbusRTUCommError ModbusRTUComm::readAdu(ModbusADU& adu) {
   ctx.start_us = MbusPlatform::microsNow();
   ctx.wait_start_us = ctx.start_us;
 
-  const uint64_t readTimeoutUsWide = static_cast<uint64_t>(_readTimeout) * 1000ULL;
-  ctx.read_timeout_us = (readTimeoutUsWide > 0xFFFFFFFFULL)
-                            ? 0xFFFFFFFFUL
-                            : static_cast<uint32_t>(readTimeoutUsWide);
+  const uint32_t lateGraceUs = _computeLateGraceUs();
+  const uint64_t requestedReadTimeoutUsWide =
+      static_cast<uint64_t>(_readTimeout) * 1000ULL;
+  const uint32_t requestedReadTimeoutUs =
+      requestedReadTimeoutUsWide > 0xFFFFFFFFULL
+          ? 0xFFFFFFFFUL
+          : static_cast<uint32_t>(requestedReadTimeoutUsWide);
+  const RxTimingBudget timingBudget = make_rx_timing_budget(
+      requestedReadTimeoutUs, lateGraceUs, _maxFrameReceiveUs);
+  ctx.read_timeout_us = timingBudget.read_timeout_us;
   ctx.first_byte_deadline_us = ctx.start_us + ctx.read_timeout_us;
 
-  const uint32_t lateGraceUs = _computeLateGraceUs();
+  // Last-resort transaction escape, anchored only to readAdu() entry. Normal
+  // termination remains governed by first-byte, RTU frame, recovery, and late
+  // deadlines. The mandatory DRAIN phase has its own MBUS_RTU_DRAIN_ESCAPE_US
+  // bound, so the total default return bound is active_escape_us plus drain.
+  const uint32_t activeEscapeUs = timingBudget.active_escape_us;
 
 #if defined(MBUS_DETAILED_METRICS) && MBUS_DETAILED_METRICS
   _dbg.last_read_start_us = ctx.start_us;
@@ -1000,16 +1059,70 @@ ModbusRTUCommError ModbusRTUComm::readAdu(ModbusADU& adu) {
 #endif
   };
 
-  auto noteFirstRxActivity = [&](uint32_t eventUs) {
+  auto noteFirstRxActivity = [&](uint32_t eventUs, uint32_t observedNowUs) {
     if (ctx.saw_rx_activity) {
       return;
     }
     const uint32_t normalizedEventUs =
-        normalize_timestamp_floor(ctx.wait_start_us, eventUs);
+        normalize_rx_event_timestamp(
+            ctx.wait_start_us, observedNowUs, eventUs, activeEscapeUs);
     ctx.saw_rx_activity = true;
     ctx.first_byte_us = normalizedEventUs;
     ctx.recovery_deadline_us = normalizedEventUs + ctx.read_timeout_us;
     ctx.frame_envelope_deadline_us = normalizedEventUs + _maxFrameReceiveUs;
+  };
+
+  auto activeEscapeExpired = [&](uint32_t nowUs) {
+    return rx_interval_elapsed(ctx.start_us, nowUs, activeEscapeUs);
+  };
+
+  auto enterDrainOnActiveEscape = [&](uint32_t nowUs) {
+    if (!activeEscapeExpired(nowUs)) {
+      return false;
+    }
+
+#if MBUS_RTU_DIRECT_SERIAL_DIAGNOSTICS_ENABLED || \
+    (defined(MBUS_DETAILED_METRICS) && MBUS_DETAILED_METRICS)
+    const uint16_t queued = _rxCount();
+    const uint32_t elapsedUs = static_cast<uint32_t>(nowUs - ctx.start_us);
+#endif
+
+#if defined(MBUS_DETAILED_METRICS) && MBUS_DETAILED_METRICS
+    _dbg.transaction_escape_count++;
+    _dbg.last_transaction_escape_us = elapsedUs;
+    _dbg.last_transaction_escape_budget_us = activeEscapeUs;
+    _dbg.last_transaction_escape_rx_count = queued;
+    _dbg.last_transaction_escape_state = static_cast<uint8_t>(ctx.state);
+#endif
+
+#if MBUS_RTU_DIRECT_SERIAL_DIAGNOSTICS_ENABLED
+    if (mbusDiagSerialTryLock()) {
+      if (mbusDiagSerialCanWrite(128U)) {
+        Serial.print("[MBUS_RTU] transaction escape us=");
+        Serial.print(static_cast<unsigned long>(elapsedUs));
+        Serial.print(" budget_us=");
+        Serial.print(static_cast<unsigned long>(activeEscapeUs));
+        Serial.print(" state=");
+        Serial.print(static_cast<unsigned>(static_cast<uint8_t>(ctx.state)));
+        Serial.print(" queued=");
+        Serial.println(static_cast<unsigned>(queued));
+      }
+      mbusDiagSerialUnlock();
+    }
+#endif
+
+    transition(RxTxnState::DRAIN);
+    return true;
+  };
+
+  auto resumeAfterProcessedCandidate = [&](uint32_t nowUs) {
+    // PROCESS_FRAME intentionally classifies one already-extracted candidate
+    // before checking H so a matching response at the legal boundary wins.
+    // An abnormal non-match can overshoot only one classifier step (and, once
+    // per burst, one cooperative yield) before this common escape check.
+    if (!enterDrainOnActiveEscape(nowUs)) {
+      transition(ctx.resume_after_process);
+    }
   };
 
   // Canonical transaction loop:
@@ -1033,7 +1146,7 @@ ModbusRTUCommError ModbusRTUComm::readAdu(ModbusADU& adu) {
     if (!ctx.saw_rx_activity && !_rxEmpty()) {
       RxEntry first{};
       const uint32_t eventUs = _peekRx(0, first) ? first.ts_us : nowUs;
-      noteFirstRxActivity(eventUs);
+      noteFirstRxActivity(eventUs, nowUs);
       if (ctx.state == RxTxnState::WAIT_FIRST ||
           ctx.state == RxTxnState::LATE_WINDOW) {
         transition(RxTxnState::RX_ACTIVE);
@@ -1048,13 +1161,15 @@ ModbusRTUCommError ModbusRTUComm::readAdu(ModbusADU& adu) {
         ctx.pending_extract = _extractNextFrame(ctx.pending_frame);
         if (ctx.pending_extract != ExtractStatus::None) {
           const uint32_t eventUs = (ctx.pending_frame.first_us != 0) ? ctx.pending_frame.first_us : nowUs;
-          const uint32_t normalizedEventUs =
-              normalize_timestamp_floor(ctx.wait_start_us, eventUs);
           if (!ctx.saw_rx_activity) {
-            noteFirstRxActivity(normalizedEventUs);
+            noteFirstRxActivity(eventUs, nowUs);
           }
           ctx.resume_after_process = RxTxnState::RX_ACTIVE;
           transition(RxTxnState::PROCESS_FRAME);
+          continue;
+        }
+
+        if (enterDrainOnActiveEscape(nowUs)) {
           continue;
         }
 
@@ -1080,6 +1195,10 @@ ModbusRTUCommError ModbusRTUComm::readAdu(ModbusADU& adu) {
         if (ctx.pending_extract != ExtractStatus::None) {
           ctx.resume_after_process = RxTxnState::RX_ACTIVE;
           transition(RxTxnState::PROCESS_FRAME);
+          continue;
+        }
+
+        if (enterDrainOnActiveEscape(nowUs)) {
           continue;
         }
 
@@ -1120,6 +1239,10 @@ ModbusRTUCommError ModbusRTUComm::readAdu(ModbusADU& adu) {
           continue;
         }
 
+        if (enterDrainOnActiveEscape(nowUs)) {
+          continue;
+        }
+
         if (static_cast<int32_t>(nowUs - ctx.late_deadline_us) >= 0) {
           transition(RxTxnState::DRAIN);
           continue;
@@ -1138,7 +1261,7 @@ ModbusRTUCommError ModbusRTUComm::readAdu(ModbusADU& adu) {
 
         if (extracted == ExtractStatus::None) {
           ctx.burst_budget = MBUS_RTU_PROCESS_BURST_CAP;
-          transition(ctx.resume_after_process);
+          resumeAfterProcessedCandidate(nowUs);
           continue;
         }
 
@@ -1157,7 +1280,7 @@ ModbusRTUCommError ModbusRTUComm::readAdu(ModbusADU& adu) {
 #if defined(MBUS_DETAILED_METRICS) && MBUS_DETAILED_METRICS
           _dbg.recovered_parse_count++;
 #endif
-          transition(ctx.resume_after_process);
+          resumeAfterProcessedCandidate(nowUs);
           continue;
         }
 
@@ -1166,7 +1289,7 @@ ModbusRTUCommError ModbusRTUComm::readAdu(ModbusADU& adu) {
 #if defined(MBUS_DETAILED_METRICS) && MBUS_DETAILED_METRICS
           _dbg.recovered_t15_count++;
 #endif
-          transition(ctx.resume_after_process);
+          resumeAfterProcessedCandidate(nowUs);
           continue;
         }
 
@@ -1175,20 +1298,18 @@ ModbusRTUCommError ModbusRTUComm::readAdu(ModbusADU& adu) {
 #if defined(MBUS_DETAILED_METRICS) && MBUS_DETAILED_METRICS
           _dbg.recovered_parse_count++;
 #endif
-          transition(ctx.resume_after_process);
+          resumeAfterProcessedCandidate(nowUs);
           continue;
         }
 
         if (extracted != ExtractStatus::Ok) {
-          transition(ctx.resume_after_process);
+          resumeAfterProcessedCandidate(nowUs);
           continue;
         }
 
         if (!ctx.saw_rx_activity) {
           const uint32_t eventUs = (ctx.pending_frame.first_us != 0) ? ctx.pending_frame.first_us : nowUs;
-          const uint32_t normalizedEventUs =
-              normalize_timestamp_floor(ctx.wait_start_us, eventUs);
-          noteFirstRxActivity(normalizedEventUs);
+          noteFirstRxActivity(eventUs, nowUs);
         }
 
         ctx.last_byte_us = ctx.pending_frame.last_us;
@@ -1197,7 +1318,7 @@ ModbusRTUCommError ModbusRTUComm::readAdu(ModbusADU& adu) {
 #if defined(MBUS_DETAILED_METRICS) && MBUS_DETAILED_METRICS
           _dbg.recovered_duplicate_count++;
 #endif
-          transition(ctx.resume_after_process);
+          resumeAfterProcessedCandidate(nowUs);
           continue;
         }
 
@@ -1228,7 +1349,7 @@ ModbusRTUCommError ModbusRTUComm::readAdu(ModbusADU& adu) {
           _dbg.recovered_late_count++;
           _dbg.late_match_after_timeout_count++;
 #endif
-          transition(ctx.resume_after_process);
+          resumeAfterProcessedCandidate(nowUs);
           continue;
         }
 
@@ -1236,7 +1357,7 @@ ModbusRTUCommError ModbusRTUComm::readAdu(ModbusADU& adu) {
         // Valid but unrelated frame while request is active; treated as stray.
         _dbg.recovered_stray_count++;
 #endif
-        transition(ctx.resume_after_process);
+        resumeAfterProcessedCandidate(nowUs);
         continue;
       }
 

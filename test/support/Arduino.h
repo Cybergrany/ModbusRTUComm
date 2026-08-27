@@ -114,6 +114,11 @@ inline uint32_t& micros_step_us() {
   return step;
 }
 
+inline uint32_t& yield_call_count() {
+  static uint32_t count = 0;
+  return count;
+}
+
 inline void reset_time(uint64_t start_us = 0) {
   clock_us() = start_us;
 }
@@ -156,6 +161,7 @@ static inline void delayMicroseconds(unsigned int us) {
 }
 
 static inline void yield() {
+  ++arduino_test::yield_call_count();
   arduino_test::advance_us(50);
 }
 

@@ -31,6 +31,38 @@ ModbusRTUComm comm(bus, DE_PIN, RE_PIN);
 comm.begin(250000, SERIAL_8N1);
 ```
 
+Direct construction remains the simplest choice when the serial topology is
+known at compile time. Configuration-driven applications can instead use the
+same adapter through its caller-placement registry facade:
+
+```cpp
+alignas(GigaBufferedSerial) unsigned char busStorage[
+    GigaBufferedSerialRegistry::storageSize()];
+
+GigaBufferedSerialRegistryResult result =
+    GigaBufferedSerialRegistry::constructAt(
+        busStorage, sizeof(busStorage), TX_PIN, RX_PIN);
+if (!result) {
+    // Invalid/misaligned storage or the shared registry is full.
+    return;
+}
+
+result.serial->begin(250000, SERIAL_8N1);
+ModbusRTUComm comm(*result.serial, DE_PIN, RE_PIN);
+
+// Stop/destroy Comm before releasing its serial adapter.
+GigaBufferedSerial* bus = result.serial;
+GigaBufferedSerialRegistry::destroyAt(bus);
+```
+
+`constructAt()` never allocates. The caller owns the storage and must keep it
+alive until after the transport has detached its readable callback and stopped
+its RX task. Direct and placement-constructed adapters use the same four-slot
+registry; `registered()`, `GigaBufferedSerialRegistry::count()`, and
+`capacity()` make admission observable. Registry construction/destruction is a
+bootstrap/teardown operation and is not safe to race with active transport
+work.
+
 This package owns both the global `GigaBufferedSerial` compatibility type and
 its `GigaSerialFormat` helper. Its Arduino backend includes those headers by a
 package-relative path so an application include directory cannot silently

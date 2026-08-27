@@ -23,7 +23,9 @@ Use this library when you are:
 - **Continuous buffered receive and recovery.** Timestamped ingress separates
   frames at T1.5/T3.5 boundaries and classifies late, duplicate, stray,
   overflowed, CRC-invalid, and malformed input. This helps long-running
-  multidrop systems recover without restarting the transport. See
+  multidrop systems recover without restarting the transport. A wrap-safe
+  transaction ceiling also bounds stale ingress or continuous non-matching
+  traffic; normal first-byte and legal-frame timing remains unchanged. See
   [`ModbusRTUComm.h`](src/ModbusRTUComm.h) and the
   [test matrix](test/README.md).
 - **Deterministic RS485 direction order.** Each send follows DE high, write,

@@ -17,6 +17,9 @@ Coverage includes:
   the signed half-range, and the transaction-wide recovery escape;
 - one-shot pre/post zero/maximum/consumption behavior on success and failure;
 - no-response/broadcast gates and preservation across consecutive requests;
+- exact next-TX interval boundaries across the signed half-range and a complete
+  `micros()` wrap, long-idle expiry, and production-shaped retained-backend-byte
+  regressions;
 - RX-ring capacity, overflow counter, drop, FIFO order, index wrap, and profile
   footprint assertions;
 - platform event publication, pending-wake replay, wrapping deadlines, and

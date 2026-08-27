@@ -1072,8 +1072,8 @@ void test_broadcast_write_enforces_turnaround_gap() {
   setBroadcastWriteMultiRegReq(bcastReq, 0, 1, 0x1234);
   TEST_ASSERT_TRUE(comm.writeAdu(bcastReq));
   const uint32_t now = arduino_test::now_us();
-  TEST_ASSERT_TRUE(comm._nextTxEarliest > now);
-  TEST_ASSERT_TRUE((comm._nextTxEarliest - now) >= comm._frameTimeout);
+  TEST_ASSERT_GREATER_OR_EQUAL_UINT32(
+      comm._frameTimeout, comm._remainingTxGateUs(now));
 }
 
 // A visual page is a no-response FC69 transaction. The next clean-line drain
@@ -1087,7 +1087,8 @@ void test_consecutive_fc69_pages_preserve_first_no_reply_gate() {
   ModbusADU first;
   setTargetedBroadcastWriteMultiRegReq(first, 20, 0, 32, 0x1000);
   TEST_ASSERT_TRUE(comm.writeAdu(first));
-  const uint32_t firstGate = comm._nextTxEarliest;
+  const uint32_t firstGate =
+      comm._txGateStartedUs + comm._txGateDurationUs;
 
   ModbusADU second;
   setTargetedBroadcastWriteMultiRegReq(second, 20, 32, 32, 0x2000);
@@ -1107,7 +1108,8 @@ void test_strict_request_after_fc69_preserves_no_reply_gate() {
   ModbusADU visual;
   setTargetedBroadcastWriteMultiRegReq(visual, 20, 0, 32, 0x3000);
   TEST_ASSERT_TRUE(comm.writeAdu(visual));
-  const uint32_t visualGate = comm._nextTxEarliest;
+  const uint32_t visualGate =
+      comm._txGateStartedUs + comm._txGateDurationUs;
 
   ModbusADU strict;
   setReadReq(strict, 34, 0x03, 0, 1);
@@ -1234,18 +1236,24 @@ void test_one_shot_pre_gap_zero_maximum_and_consumption_are_stable() {
   comm.begin(250000, SERIAL_8N1);
 
   // Isolate the one-shot API from begin()'s initial clean-line holdoff.
-  comm._nextTxEarliest = arduino_test::now_us();
-  const uint32_t zeroBaseline = comm._nextTxEarliest;
+  comm._replaceTxGate(arduino_test::now_us(), 0U);
+  const uint32_t zeroStarted = comm._txGateStartedUs;
+  const uint32_t zeroDuration = comm._txGateDurationUs;
   comm.setPreTxGapUsOnce(0U);
-  TEST_ASSERT_EQUAL_UINT32(zeroBaseline, comm._nextTxEarliest);
+  TEST_ASSERT_EQUAL_UINT32(zeroStarted, comm._txGateStartedUs);
+  TEST_ASSERT_EQUAL_UINT32(zeroDuration, comm._txGateDurationUs);
 
   comm.setPreTxGapUsOnce(4000U);
-  const uint32_t firstGate = comm._nextTxEarliest;
+  const uint32_t firstGateStarted = comm._txGateStartedUs;
+  const uint32_t firstGateDuration = comm._txGateDurationUs;
   comm.setPreTxGapUsOnce(1000U);
-  TEST_ASSERT_EQUAL_UINT32(firstGate, comm._nextTxEarliest);
+  TEST_ASSERT_EQUAL_UINT32(firstGateStarted, comm._txGateStartedUs);
+  TEST_ASSERT_EQUAL_UINT32(firstGateDuration, comm._txGateDurationUs);
   comm.setPreTxGapUsOnce(7000U);
-  const uint32_t maximumGate = comm._nextTxEarliest;
-  TEST_ASSERT_TRUE(static_cast<int32_t>(maximumGate - firstGate) > 0);
+  const uint32_t maximumGate =
+      comm._txGateStartedUs + comm._txGateDurationUs;
+  TEST_ASSERT_GREATER_THAN_UINT32(firstGateDuration,
+                                  comm._txGateDurationUs);
 
   ModbusADU first;
   setReadReq(first, 0x11, 0x03, 0, 1);
@@ -1255,7 +1263,7 @@ void test_one_shot_pre_gap_zero_maximum_and_consumption_are_stable() {
 
   // writeAdu() replaces the consumed pre-gap with the normal next-frame gate.
   const uint32_t afterFirst = arduino_test::now_us();
-  const uint32_t firstScheduledGap = comm._nextTxEarliest - afterFirst;
+  const uint32_t firstScheduledGap = comm._remainingTxGateUs(afterFirst);
   TEST_ASSERT_LESS_OR_EQUAL_UINT32(comm._frameTimeout + 64U,
                                   firstScheduledGap);
 
@@ -1263,8 +1271,8 @@ void test_one_shot_pre_gap_zero_maximum_and_consumption_are_stable() {
   ModbusADU second;
   setReadReq(second, 0x12, 0x03, 0, 1);
   TEST_ASSERT_TRUE(comm.writeAdu(second));
-  const uint32_t secondScheduledGap =
-      comm._nextTxEarliest - arduino_test::now_us();
+  const uint32_t secondScheduledGap = comm._remainingTxGateUs(
+      arduino_test::now_us());
   TEST_ASSERT_LESS_OR_EQUAL_UINT32(comm._frameTimeout + 64U,
                                   secondScheduledGap);
 }
@@ -1286,7 +1294,7 @@ void test_one_shot_post_gap_uses_maximum_and_is_consumed_after_success() {
   setReadReq(first, 0x11, 0x03, 0, 1);
   TEST_ASSERT_TRUE(comm.writeAdu(first));
   TEST_ASSERT_EQUAL_UINT32(0U, comm._oneShotPostGapUs);
-  const uint32_t postGap = comm._nextTxEarliest - arduino_test::now_us();
+  const uint32_t postGap = comm._remainingTxGateUs(arduino_test::now_us());
   TEST_ASSERT_GREATER_OR_EQUAL_UINT32(comm._frameTimeout + 5000U - 64U,
                                      postGap);
 
@@ -1294,8 +1302,7 @@ void test_one_shot_post_gap_uses_maximum_and_is_consumed_after_success() {
   ModbusADU second;
   setReadReq(second, 0x12, 0x03, 0, 1);
   TEST_ASSERT_TRUE(comm.writeAdu(second));
-  const uint32_t normalGap =
-      comm._nextTxEarliest - arduino_test::now_us();
+  const uint32_t normalGap = comm._remainingTxGateUs(arduino_test::now_us());
   TEST_ASSERT_LESS_OR_EQUAL_UINT32(comm._frameTimeout + 64U, normalGap);
 }
 
@@ -1311,17 +1318,122 @@ void test_partial_write_consumes_post_gap_but_preserves_failure_holdoff() {
   setReadReq(request, 0x11, 0x03, 0, 1);
   TEST_ASSERT_FALSE(comm.writeAdu(request));
   TEST_ASSERT_EQUAL_UINT32(0U, comm._oneShotPostGapUs);
-  const uint32_t failureGap =
-      comm._nextTxEarliest - arduino_test::now_us();
+  const uint32_t failureGap = comm._remainingTxGateUs(arduino_test::now_us());
   TEST_ASSERT_GREATER_OR_EQUAL_UINT32(comm._frameTimeout + 4000U - 64U,
                                      failureGap);
 
   arduino_test::advance_us(failureGap + 16U);
   serial.setWriteLimit(static_cast<size_t>(-1));
   TEST_ASSERT_TRUE(comm.writeAdu(request));
-  const uint32_t normalGap =
-      comm._nextTxEarliest - arduino_test::now_us();
+  const uint32_t normalGap = comm._remainingTxGateUs(arduino_test::now_us());
   TEST_ASSERT_LESS_OR_EQUAL_UINT32(comm._frameTimeout + 64U, normalGap);
+}
+
+void test_tx_gate_elapsed_interval_is_exact_across_wrap_and_long_idle() {
+  resetTestClock();
+  ScriptedStream serial;
+  ModbusRTUComm comm(serial);
+
+  const uint32_t startUs = 0xFFFFFFF0UL;
+  comm._replaceTxGate(startUs, 100U);
+  TEST_ASSERT_EQUAL_UINT32(100U, comm._remainingTxGateUs(startUs));
+  TEST_ASSERT_EQUAL_UINT32(1U, comm._remainingTxGateUs(startUs + 99U));
+  TEST_ASSERT_EQUAL_UINT32(0U, comm._remainingTxGateUs(startUs + 100U));
+
+  // These are the old signed-deadline danger zone and the observed idle age.
+  // A bounded elapsed interval is already expired at each boundary.
+  comm._replaceTxGate(1000U, 6000U);
+  TEST_ASSERT_EQUAL_UINT32(
+      0U, comm._remainingTxGateUs(1000U + 0x80000000UL));
+  TEST_ASSERT_EQUAL_UINT32(
+      0U, comm._remainingTxGateUs(1000U + 3209007000UL));
+  TEST_ASSERT_EQUAL_UINT32(
+      0U,
+      comm._remainingTxGateUs(
+          static_cast<uint32_t>(1000ULL + 0xFFFFFFFFULL)));
+
+  TEST_ASSERT_EQUAL_UINT32(
+      0x7FFFFFFFUL, comm._boundedTxGateUs(0x100000000ULL));
+}
+
+void test_retained_backend_byte_cannot_revive_dormant_tx_gate() {
+  resetTestClock();
+  ScriptedStream serial;
+  ModbusRTUComm comm(serial);
+  comm.begin(250000, SERIAL_8N1);
+
+  // RX threading is disabled in the production profile, so a byte may remain
+  // in the serial backend until the next write.  Place the old gate just below
+  // a full micros() wrap: the historical signed deadline implementation would
+  // ingest this byte, refresh the idle watchdog, then sleep for about 50 ms.
+  serial.clear();
+  serial.pushBytes({0xA5U}, arduino_test::now_us(), 0U);
+  arduino_test::advance_us(0xFFFFFFFFULL - 50000ULL);
+  arduino_test::clear_io_events();
+
+  ModbusADU request;
+  setReadReq(request, 0x11, 0x03, 0x006B, 0x0003);
+  const uint64_t startUs = arduino_test::clock_us();
+  TEST_ASSERT_TRUE(comm.writeAdu(request));
+  const uint64_t elapsedUs = arduino_test::clock_us() - startUs;
+
+  TEST_ASSERT_LESS_THAN_UINT64(10000ULL, elapsedUs);
+  TEST_ASSERT_LESS_THAN_UINT32(1000U, comm.debugInfo().last_tx_wait_us);
+  uint32_t millisecondSleeps = 0U;
+  for (const arduino_test::IoEvent& event : arduino_test::io_events()) {
+    if (event.operation == arduino_test::IoOperation::DelayMilliseconds) {
+      ++millisecondSleeps;
+    }
+  }
+  TEST_ASSERT_EQUAL_UINT32(0U, millisecondSleeps);
+}
+
+void test_retained_backend_byte_cannot_revive_gate_after_full_micros_wrap() {
+  resetTestClock();
+  ScriptedStream serial;
+  ModbusRTUComm comm(serial);
+  comm.begin(250000, SERIAL_8N1);
+
+  // A large public one-shot makes the exact full-wrap alias observable. The
+  // pre-ingress idle watchdog must clear it before this delayed backend byte
+  // refreshes last-traffic state.
+  comm.setPreTxGapUsOnce(60000000UL);
+  serial.clear();
+  serial.pushBytes({0x5AU}, arduino_test::now_us(), 0U);
+  arduino_test::advance_us(0x100000000ULL);
+
+  ModbusADU request;
+  setReadReq(request, 0x11, 0x03, 0x006B, 0x0003);
+  const uint64_t startUs = arduino_test::clock_us();
+  TEST_ASSERT_TRUE(comm.writeAdu(request));
+  const uint64_t elapsedUs = arduino_test::clock_us() - startUs;
+
+  TEST_ASSERT_LESS_THAN_UINT64(10000ULL, elapsedUs);
+  TEST_ASSERT_LESS_THAN_UINT32(1000U, comm.debugInfo().last_tx_wait_us);
+}
+
+void test_rx_thread_byte_cannot_revive_gate_after_full_micros_wrap() {
+  resetTestClock();
+  ScriptedStream serial;
+  ModbusRTUComm comm(serial);
+  comm.begin(250000, SERIAL_8N1);
+
+  // The RX-thread profile can ingest a byte and refresh lastTraffic before the
+  // transport thread reaches _drainToIdle(). Gate age therefore has to be
+  // independent of traffic age, not merely checked before polling Stream.
+  comm.setPreTxGapUsOnce(60000000UL);
+  arduino_test::advance_us(0x100000000ULL);
+  TEST_ASSERT_TRUE(
+      comm._pushRxByte(0x5AU, arduino_test::now_us()));
+
+  ModbusADU request;
+  setReadReq(request, 0x11, 0x03, 0x006B, 0x0003);
+  const uint64_t startUs = arduino_test::clock_us();
+  TEST_ASSERT_TRUE(comm.writeAdu(request));
+  const uint64_t elapsedUs = arduino_test::clock_us() - startUs;
+
+  TEST_ASSERT_LESS_THAN_UINT64(10000ULL, elapsedUs);
+  TEST_ASSERT_LESS_THAN_UINT32(1000U, comm.debugInfo().last_tx_wait_us);
 }
 
 void test_rx_ring_capacity_overflow_drop_and_index_wrap_are_bounded() {
@@ -1659,6 +1771,10 @@ void run_modbus_rtu_transport_tests() {
   RUN_TEST(test_one_shot_pre_gap_zero_maximum_and_consumption_are_stable);
   RUN_TEST(test_one_shot_post_gap_uses_maximum_and_is_consumed_after_success);
   RUN_TEST(test_partial_write_consumes_post_gap_but_preserves_failure_holdoff);
+  RUN_TEST(test_tx_gate_elapsed_interval_is_exact_across_wrap_and_long_idle);
+  RUN_TEST(test_retained_backend_byte_cannot_revive_dormant_tx_gate);
+  RUN_TEST(test_retained_backend_byte_cannot_revive_gate_after_full_micros_wrap);
+  RUN_TEST(test_rx_thread_byte_cannot_revive_gate_after_full_micros_wrap);
   RUN_TEST(test_rx_ring_capacity_overflow_drop_and_index_wrap_are_bounded);
   RUN_TEST(test_exact_fc03_tx_bytes_succeed_without_local_echo);
   RUN_TEST(test_exact_fc69_no_reply_bytes_and_crc_are_stable);

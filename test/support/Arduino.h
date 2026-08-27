@@ -143,7 +143,11 @@ static inline unsigned long micros() {
 }
 
 static inline unsigned long millis() {
-  return static_cast<unsigned long>(arduino_test::now_us() / 1000UL);
+  // Arduino millis() has its own 32-bit millisecond wrap; it does not reset at
+  // each 32-bit micros() wrap. Preserve that independent coarse clock so tests
+  // can distinguish one complete micros epoch from a genuinely fresh gate.
+  return static_cast<unsigned long>(
+      (arduino_test::clock_us() / 1000ULL) & 0xFFFFFFFFULL);
 }
 
 static inline void delay(unsigned long ms) {

@@ -115,7 +115,9 @@ transport.writeAdu(adu);
 
 Each value is consumed by the next attempted transaction. Use this for a
 specific slow device or transition, not as a replacement for correct bus-wide
-RTU timing.
+RTU timing. Requested gaps are bounded to the unambiguous half of the 32-bit
+`micros()` range. Internally, the next-TX gate uses elapsed time, so an expired
+gap stays expired across clock wrap and long periods with no traffic.
 
 ## Platform backends
 

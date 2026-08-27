@@ -100,7 +100,7 @@ void test_drain_failure_restores_de_and_consumes_post_gap() {
                           comm.debugInfo().last_err);
   TEST_ASSERT_GREATER_OR_EQUAL_UINT32(
       comm._frameTimeout + 4000U - 64U,
-      comm._nextTxEarliest - arduino_test::now_us());
+      comm._remainingTxGateUs(arduino_test::now_us()));
 
   const uint8_t expected[] = {
       0x11, 0x03, 0x00, 0x6B, 0x00, 0x03, 0x76, 0x87};

@@ -42,6 +42,7 @@ static inline bool timestamp_not_before(uint32_t referenceUs, uint32_t sampleUs)
 // 32-bit delta. Keep one transaction strictly inside that unambiguous half of
 // the micros() range, including the late-response and maximum-frame windows.
 static const uint32_t kMaxWrapSafeRxIntervalUs = 0x7FFFFFFFUL;
+static const uint32_t kMaxWrapSafeTxIntervalUs = 0x7FFFFFFFUL;
 
 struct RxTimingBudget {
   uint32_t read_timeout_us;
@@ -225,7 +226,10 @@ void ModbusRTUComm::begin(unsigned long baud, uint32_t config) {
     }
   } while ((MbusPlatform::microsNow() - drainStartUs) < _frameTimeout);
 
-  _nextTxEarliest = MbusPlatform::microsNow() + _frameTimeout + _baseExtraGapUs;
+  const uint32_t txGateStartUs = MbusPlatform::microsNow();
+  _replaceTxGate(
+      txGateStartUs,
+      static_cast<uint64_t>(_frameTimeout) + _baseExtraGapUs);
   _lastTrafficMs.store(MbusPlatform::millisNow(), MBUS_MEM_RELAXED);
 
   _attachIngressAdapter();
@@ -237,6 +241,51 @@ void ModbusRTUComm::setTimeout(unsigned long timeout) {
 #if defined(MBUS_DETAILED_METRICS) && MBUS_DETAILED_METRICS
   _dbg.read_timeout_ms = _readTimeout;
 #endif
+}
+
+uint32_t ModbusRTUComm::_boundedTxGateUs(uint64_t requestedUs) {
+  return requestedUs > kMaxWrapSafeTxIntervalUs
+             ? kMaxWrapSafeTxIntervalUs
+             : static_cast<uint32_t>(requestedUs);
+}
+
+uint32_t ModbusRTUComm::_remainingTxGateUs(uint32_t nowUs) const {
+  const uint32_t durationUs = _txGateDurationUs;
+  if (durationUs == 0U) {
+    return 0U;
+  }
+
+  const uint32_t elapsedUs = nowUs - _txGateStartedUs;
+  return elapsedUs >= durationUs ? 0U : durationUs - elapsedUs;
+}
+
+void ModbusRTUComm::_replaceTxGate(uint32_t nowUs, uint64_t durationUs) {
+  _txGateStartedUs = nowUs;
+  _txGateStartedMs = MbusPlatform::millisNow();
+  _txGateDurationUs = _boundedTxGateUs(durationUs);
+}
+
+void ModbusRTUComm::_extendTxGate(uint32_t nowUs, uint64_t durationUs) {
+  const uint32_t requestedUs = _boundedTxGateUs(durationUs);
+  if (requestedUs > _remainingTxGateUs(nowUs)) {
+    _replaceTxGate(nowUs, requestedUs);
+  }
+}
+
+void ModbusRTUComm::_expireTxGateByCoarseAge(uint32_t nowMs) {
+  const uint32_t durationUs = _txGateDurationUs;
+  if (durationUs == 0U) {
+    return;
+  }
+
+  // millis() has a much longer wrap period than micros(). It is used only as
+  // a coarse proof that this bounded interval has elapsed, so the hot TX wait
+  // loop retains its original micros-only cost and precision.
+  const uint32_t durationMsCeil =
+      (durationUs / 1000U) + ((durationUs % 1000U) != 0U ? 1U : 0U);
+  if (static_cast<uint32_t>(nowMs - _txGateStartedMs) > durationMsCeil) {
+    _replaceTxGate(MbusPlatform::microsNow(), 0U);
+  }
 }
 
 #if defined(MBUS_DETAILED_METRICS) && MBUS_DETAILED_METRICS
@@ -265,11 +314,8 @@ void ModbusRTUComm::setPreTxGapUsOnce(unsigned long extraGapUs) {
   if (extraGapUs == 0) {
     return;
   }
-  const unsigned long now = MbusPlatform::microsNow();
-  const unsigned long desired = now + extraGapUs;
-  if ((int32_t)(desired - _nextTxEarliest) > 0) {
-    _nextTxEarliest = desired;
-  }
+  const uint32_t nowUs = MbusPlatform::microsNow();
+  _extendTxGate(nowUs, extraGapUs);
 #if defined(MBUS_DETAILED_METRICS) && MBUS_DETAILED_METRICS
   _dbg.extra_gap_us = _baseExtraGapUs + extraGapUs;
 #endif
@@ -279,8 +325,9 @@ void ModbusRTUComm::setPostTxGapUsOnce(unsigned long extraGapUs) {
   if (extraGapUs == 0) {
     return;
   }
-  if (extraGapUs > _oneShotPostGapUs) {
-    _oneShotPostGapUs = extraGapUs;
+  const uint32_t boundedGapUs = _boundedTxGateUs(extraGapUs);
+  if (boundedGapUs > _oneShotPostGapUs) {
+    _oneShotPostGapUs = boundedGapUs;
   }
 }
 
@@ -878,6 +925,22 @@ bool ModbusRTUComm::_matchAndConsumeTimedOutPending(const FrameView& frame, uint
 }
 
 bool ModbusRTUComm::_drainToIdle() {
+  // Evaluate the existing stale-gate watchdog before polling the serial
+  // backend. A byte retained there during a long idle period receives a fresh
+  // timestamp when ingested; clearing first prevents that fresh RX evidence
+  // from reviving an old gate at either the signed half-range or a full
+  // micros() wrap. This branch is inert throughout normal millisecond-scale
+  // RTU scheduling.
+  const uint32_t preDrainNowMs = MbusPlatform::millisNow();
+  _expireTxGateByCoarseAge(preDrainNowMs);
+  const uint32_t preDrainLastTrafficMs =
+      _lastTrafficMs.load(MBUS_MEM_RELAXED);
+  if(preDrainLastTrafficMs != 0U &&
+     static_cast<uint32_t>(preDrainNowMs - preDrainLastTrafficMs) >
+     _idleResetMs){
+    _replaceTxGate(MbusPlatform::microsNow(), 0U);
+  }
+
   _expireTimedOutPending(MbusPlatform::microsNow());
   const uint32_t drainStartUs = MbusPlatform::microsNow();
 
@@ -913,12 +976,10 @@ bool ModbusRTUComm::_drainToIdle() {
     const uint32_t sinceRx = (lastRxUs == 0) ? nowUs : (nowUs - lastRxUs);
     if (_rxEmpty() && sinceRx >= _frameTimeout) {
       // RX-idle proof may extend the next-TX boundary, but it must never erase
-      // a later no-response, broadcast, or one-shot holdoff armed by writeAdu().
-      // All transport deadlines are bounded well inside the signed half-range.
-      const uint32_t rxIdleEarliest = nowUs + _baseExtraGapUs;
-      if (static_cast<int32_t>(rxIdleEarliest - _nextTxEarliest) > 0) {
-        _nextTxEarliest = rxIdleEarliest;
-      }
+      // a live no-response, broadcast, or one-shot holdoff armed by writeAdu().
+      // Comparing bounded remaining durations also means a dormant, expired
+      // gate cannot be revived by freshly ingesting a byte after long idle.
+      _extendTxGate(nowUs, _baseExtraGapUs);
       return true;
     }
 
@@ -960,7 +1021,10 @@ bool ModbusRTUComm::_drainToIdle() {
       _rxTail.store(head, MBUS_MEM_RELEASE);
       _lastRxByteUs.store(0, MBUS_MEM_RELAXED);
       _timedOutPending.valid = false;
-      _nextTxEarliest = MbusPlatform::microsNow() + _frameTimeout + _baseExtraGapUs;
+      const uint32_t recoveryGateStartUs = MbusPlatform::microsNow();
+      _replaceTxGate(
+          recoveryGateStartUs,
+          static_cast<uint64_t>(_frameTimeout) + _baseExtraGapUs);
       _lastTrafficMs.store(MbusPlatform::millisNow(), MBUS_MEM_RELAXED);
       return false;
     }
@@ -1467,17 +1531,18 @@ bool ModbusRTUComm::writeAdu(ModbusADU& adu) {
   // If we have been idle for a while, clear stale gates.
   const uint32_t lastTrafficMs = _lastTrafficMs.load(MBUS_MEM_RELAXED);
   if (lastTrafficMs != 0 && static_cast<uint32_t>(nowMs - lastTrafficMs) > _idleResetMs) {
-    _nextTxEarliest = now;
+    _replaceTxGate(now, 0U);
   }
 
-  while (static_cast<int32_t>(now - _nextTxEarliest) < 0) {
-    const unsigned long remaining = _nextTxEarliest - now;
+  unsigned long remaining = _remainingTxGateUs(now);
+  while (remaining != 0U) {
     if (remaining > 12000UL) {
       MbusPlatform::sleepMilliseconds(1);
     } else {
       _yield_if_long_gap(gateStart);
     }
     now = MbusPlatform::microsNow();
+    remaining = _remainingTxGateUs(now);
   }
 
 #if MBUS_RTU_PLATFORM_TRACE
@@ -1527,7 +1592,10 @@ bool ModbusRTUComm::writeAdu(ModbusADU& adu) {
 
   if (written != txLen || !flushed) {
     _lastTrafficMs.store(MbusPlatform::millisNow(), MBUS_MEM_RELAXED);
-    _nextTxEarliest = MbusPlatform::microsNow() + _frameTimeout + _baseExtraGapUs + postGapUs;
+    const uint32_t failureGateStartUs = MbusPlatform::microsNow();
+    _replaceTxGate(
+        failureGateStartUs,
+        static_cast<uint64_t>(_frameTimeout) + _baseExtraGapUs + postGapUs);
 #if defined(MBUS_DETAILED_METRICS) && MBUS_DETAILED_METRICS
     _dbg.last_err = MODBUS_RTU_COMM_FRAME_ERROR;
     _dbg.frame_err_count++;
@@ -1585,11 +1653,13 @@ bool ModbusRTUComm::writeAdu(ModbusADU& adu) {
     if (gateUs > _noReplyCapUs) {
       gateUs = _noReplyCapUs;
     }
-    gateUs += _baseExtraGapUs;
-    gateUs += postGapUs;
-    _nextTxEarliest = MbusPlatform::microsNow() + gateUs;
+    const uint64_t completeGateUs =
+        static_cast<uint64_t>(gateUs) + _baseExtraGapUs + postGapUs;
+    _replaceTxGate(MbusPlatform::microsNow(), completeGateUs);
   } else {
-    _nextTxEarliest = MbusPlatform::microsNow() + _frameTimeout + _baseExtraGapUs + postGapUs;
+    _replaceTxGate(
+        MbusPlatform::microsNow(),
+        static_cast<uint64_t>(_frameTimeout) + _baseExtraGapUs + postGapUs);
   }
 
 #if defined(MBUS_DETAILED_METRICS) && MBUS_DETAILED_METRICS

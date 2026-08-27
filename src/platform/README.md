@@ -24,7 +24,7 @@ A complete backend provides these static operations:
 
 | Area | Operations and contract |
 | --- | --- |
-| Clock/wait | `microsNow()`, `millisNow()`, `sleepMilliseconds()`, `waitDelayMicroseconds()`, and `yieldTask()`. Clocks wrap as `uint32_t`; waits must not return before their logical delay. |
+| Clock/wait | `microsNow()`, `millisNow()`, `sleepMilliseconds()`, `waitDelayMicroseconds()`, and `yieldTask()`. Each clock wraps independently at its natural `uint32_t` period; `millisNow()` must retain its epoch across a `microsNow()` wrap rather than being derived from an already-truncated microsecond value. Waits must not return before their logical delay. |
 | Stream | `available()`, `read()`, `write()`, and `waitForTransmitDrain()`. A successful drain means accepted bytes are safe to follow with the caller's post-delay and DE-low transition. |
 | RS485 direction | `configureDriverPins()` configures supplied DE and RE pins as outputs and drives both low (receive-safe); `setDriverTransmit()` performs only the requested DE transition. Negative pins are unused. RE is not toggled per transmission. |
 | Readable hint | `attachReadable()` installs a short edge callback or returns false for polling. `detachReadable()` removes it. Neither operation owns the stream or context. |
@@ -61,6 +61,12 @@ while (!idle.reached(Platform::microsNow())) {
   Platform::yieldTask();
 }
 ```
+
+Next-TX gates use a bounded microsecond elapsed interval for precise active
+timing and the independent millisecond clock only to prove that a dormant gate
+has expired after a complete microsecond-clock wrap. Backends that derive
+`millisNow()` from the low 32 bits of `microsNow()` violate this contract and
+cannot provide the long-idle guarantee.
 
 ## TX ordering
 

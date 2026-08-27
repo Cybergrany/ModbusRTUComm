@@ -16,6 +16,11 @@
 // writes and FC69), completes without readAdu(), and holds the following TX
 // behind the calculated turnaround gate.
 #define MBUS_RTU_COMM_HAS_NO_RESPONSE_GATE 1
+// Next-TX holdoffs are represented as bounded elapsed-time intervals rather
+// than signed comparisons against an absolute micros() deadline.  Consumers
+// can use this capability when they need to distinguish the long-idle-safe
+// scheduler from older compatible transports.
+#define MBUS_RTU_COMM_HAS_WRAP_SAFE_TX_GATE 1
 
 #ifndef MASTER_RTU_EXTRA_GAP_US
 #define MASTER_RTU_EXTRA_GAP_US 0UL
@@ -403,8 +408,14 @@ class ModbusRTUComm {
     unsigned long _readTimeout = 0;
     unsigned long _oneShotPostGapUs = 0;
 
-    // Earliest time (micros) when the next transmission may start
-    unsigned long _nextTxEarliest = 0;
+    // The next-TX holdoff is an elapsed-time interval, not an absolute micros()
+    // deadline. A coarse gate-start timestamp lets the scheduler retire an
+    // interval before RX ingestion even after a complete micros() wrap.
+    // Durations are bounded below the signed half-range; normal RTU/FC69 gates
+    // are only a few milliseconds.
+    uint32_t _txGateStartedUs = 0;
+    uint32_t _txGateStartedMs = 0;
+    uint32_t _txGateDurationUs = 0;
     // Last RX/TX activity time (millis) for idle watchdog recovery.
     // Updated by RX ingress thread and transport thread.
     MbusAtomicU32 _lastTrafficMs{0};
@@ -476,6 +487,11 @@ class ModbusRTUComm {
 
     bool _drainToIdle();
     uint32_t _computeLateGraceUs() const;
+    static uint32_t _boundedTxGateUs(uint64_t requestedUs);
+    uint32_t _remainingTxGateUs(uint32_t nowUs) const;
+    void _replaceTxGate(uint32_t nowUs, uint64_t durationUs);
+    void _extendTxGate(uint32_t nowUs, uint64_t durationUs);
+    void _expireTxGateByCoarseAge(uint32_t nowMs);
 
     TimedOutPending _timedOutPending{};
 

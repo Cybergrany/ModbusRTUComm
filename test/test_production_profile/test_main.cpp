@@ -33,13 +33,20 @@
 #error "Production profile requires no-response next-TX gating"
 #endif
 
+#if !defined(MBUS_RTU_COMM_HAS_WRAP_SAFE_TX_GATE) || \
+    MBUS_RTU_COMM_HAS_WRAP_SAFE_TX_GATE != 1
+#error "Production profile requires wrap-safe next-TX gating"
+#endif
+
 static_assert(MBUS_RTU_RX_RING_SIZE == 256,
               "generic production polling profile uses a 256-entry RX ring");
 static_assert(MBUS_RTU_ENABLE_RX_THREAD == 0,
               "generic production profile keeps RX task support disabled");
 static_assert(MBUS_RTU_TIMING_MODE == MBUS_RTU_TIMING_SPEC_FIXED_GT19200,
               "production profile uses fixed high-baud T1.5/T3.5 timing");
-static_assert(sizeof(ModbusRTUComm) == 3776U,
+// The independent microsecond and millisecond gate epochs add eight bytes to
+// the characterized native layout; no dynamic storage is introduced.
+static_assert(sizeof(ModbusRTUComm) == 3784U,
               "production native ABI footprint changed");
 
 namespace {
@@ -164,7 +171,7 @@ void test_production_tu_exact_frames_order_timing_and_no_response_gate() {
   // Keep the production native ABI footprint bounded alongside the explicit
   // ring profile. This detects accidental metrics/trace state or per-object
   // backend storage being introduced into a release build.
-  TEST_ASSERT_EQUAL_UINT32(3776U, sizeof(ModbusRTUComm));
+  TEST_ASSERT_EQUAL_UINT32(3784U, sizeof(ModbusRTUComm));
 
   arduino_test::clear_io_events();
   ModbusADU noResponse;

@@ -23,8 +23,11 @@ class ModbusRTUComm {
     void begin(unsigned long baud, uint32_t config = SERIAL_8N1);
     void setTimeout(unsigned long timeout);
     ModbusRTUCommError readAdu(ModbusADU& adu);
-    // Stops at a CRC-valid expected length so any queued trailing ADU remains
-    // available for the next read. The one-argument reader remains unchanged.
+    // Stops at a CRC-valid expected length so queued trailing bytes remain for
+    // the next read. When trailing bytes are already available, this overload
+    // returns without an additional T3.5 wait so the caller can drain them;
+    // otherwise it preserves the normal frame-gap wait. The one-argument
+    // reader remains unchanged.
     ModbusRTUCommError readAdu(ModbusADU& adu,
                                ModbusRTUExpectedLengthFn expectedLength);
     bool writeAdu(ModbusADU& adu);

@@ -104,7 +104,11 @@ ModbusRTUCommError ModbusRTUComm::readAdu(ModbusADU& adu,
     }
   } while (!completePrefix && micros() - startMicros <= _charTimeout && len < 256);
   adu.setRtuLen(len);
-  while (micros() - startMicros < _frameTimeout);
+  // A final frame still observes T3.5 before a possible response. If another
+  // byte is already queued after a CRC-valid expected-length prefix, its wire
+  // timing is no longer observable and waiting here only delays the next read.
+  while (micros() - startMicros < _frameTimeout &&
+         (!completePrefix || !_serial.available()));
   if (!completePrefix && _serial.available()) {
     adu.setRtuLen(0);
     return MODBUS_RTU_COMM_FRAME_ERROR;

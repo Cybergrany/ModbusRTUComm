@@ -11,12 +11,22 @@ enum ModbusRTUCommError : uint8_t {
   MODBUS_RTU_COMM_CRC_ERROR = 3
 };
 
+// Returns the expected total RTU ADU length, including CRC, once enough of
+// the frame has been received to determine it. A return value of zero means
+// that the length is not known yet.
+typedef uint16_t (*ModbusRTUExpectedLengthFn)(const uint8_t* rtu,
+                                              uint16_t receivedLen);
+
 class ModbusRTUComm {
   public:
     ModbusRTUComm(Stream& serial, int dePin = -1, int rePin = -1);
     void begin(unsigned long baud, uint32_t config = SERIAL_8N1);
     void setTimeout(unsigned long timeout);
     ModbusRTUCommError readAdu(ModbusADU& adu);
+    // Stops at a CRC-valid expected length so any queued trailing ADU remains
+    // available for the next read. The one-argument reader remains unchanged.
+    ModbusRTUCommError readAdu(ModbusADU& adu,
+                               ModbusRTUExpectedLengthFn expectedLength);
     bool writeAdu(ModbusADU& adu);
 
   private:

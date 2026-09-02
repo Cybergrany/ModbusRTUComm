@@ -81,6 +81,41 @@ ModbusRTUCommError ModbusRTUComm::readAdu(ModbusADU& adu) {
   return MODBUS_RTU_COMM_SUCCESS;
 }
 
+ModbusRTUCommError ModbusRTUComm::readAdu(ModbusADU& adu,
+                                          ModbusRTUExpectedLengthFn expectedLength) {
+  adu.setRtuLen(0);
+  unsigned long startMillis = millis();
+  while (!_serial.available()) {
+    if (millis() - startMillis >= _readTimeout) return MODBUS_RTU_COMM_TIMEOUT;
+  }
+  uint16_t len = 0;
+  bool completePrefix = false;
+  unsigned long startMicros = micros();
+  do {
+    if (_serial.available()) {
+      startMicros = micros();
+      adu.rtu[len] = _serial.read();
+      len++;
+      const uint16_t expected = expectedLength ? expectedLength(adu.rtu, len) : 0;
+      if (expected != 0 && expected == len) {
+        adu.setRtuLen(len);
+        completePrefix = adu.crcGood();
+      }
+    }
+  } while (!completePrefix && micros() - startMicros <= _charTimeout && len < 256);
+  adu.setRtuLen(len);
+  while (micros() - startMicros < _frameTimeout);
+  if (!completePrefix && _serial.available()) {
+    adu.setRtuLen(0);
+    return MODBUS_RTU_COMM_FRAME_ERROR;
+  }
+  if (!adu.crcGood()) {
+    adu.setRtuLen(0);
+    return MODBUS_RTU_COMM_CRC_ERROR;
+  }
+  return MODBUS_RTU_COMM_SUCCESS;
+}
+
 bool ModbusRTUComm::writeAdu(ModbusADU& adu) {
   uint16_t i = 0;
   uint16_t j = 0;

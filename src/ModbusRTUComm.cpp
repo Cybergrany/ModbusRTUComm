@@ -6,6 +6,7 @@ ModbusRTUComm::ModbusRTUComm(Stream& serial, int dePin, int rePin) : _serial(ser
 }
 
 void ModbusRTUComm::begin(unsigned long baud, uint32_t config) {
+  _discardUntilIdle = false;
   unsigned long bitsPerChar;
   switch (config) {
     case SERIAL_8E2:
@@ -81,43 +82,108 @@ ModbusRTUCommError ModbusRTUComm::readAdu(ModbusADU& adu) {
   return MODBUS_RTU_COMM_SUCCESS;
 }
 
-ModbusRTUCommError ModbusRTUComm::readAdu(ModbusADU& adu,
-                                          ModbusRTUExpectedLengthFn expectedLength) {
+void ModbusRTUComm::beginDiscard(unsigned long lastByteMicros) {
+  _discardUntilIdle = true;
+  _discardLastByteMicros = lastByteMicros;
+}
+
+void ModbusRTUComm::drainUntilIdle() {
+  const unsigned long passStartMicros = micros();
+  uint16_t drained = 0;
+  while (_discardUntilIdle) {
+    const unsigned long now = micros();
+    if (now - _discardLastByteMicros >= _frameTimeout) {
+      _discardUntilIdle = false;
+      return;
+    }
+    if (drained >= MODBUS_RTU_DRAIN_MAX_BYTES_PER_PASS ||
+        now - passStartMicros >= MODBUS_RTU_DRAIN_MAX_MICROS_PER_PASS) {
+      return;
+    }
+    if (_serial.available()) {
+      const int value = _serial.read();
+      if (value >= 0) {
+        _discardLastByteMicros = micros();
+        drained++;
+      }
+    }
+  }
+}
+
+ModbusRTUCommError ModbusRTUComm::readAdu(
+    ModbusADU& adu,
+    ModbusRTUFrameCandidateFn frameCandidate,
+    ModbusRTUFrameCandidateFn additionalFrameCandidate,
+    bool& usedBufferedCandidate) {
   adu.setRtuLen(0);
+  usedBufferedCandidate = false;
+  if (_discardUntilIdle) {
+    drainUntilIdle();
+    return MODBUS_RTU_COMM_FRAME_ERROR;
+  }
   unsigned long startMillis = millis();
   while (!_serial.available()) {
     if (millis() - startMillis >= _readTimeout) return MODBUS_RTU_COMM_TIMEOUT;
   }
   uint16_t len = 0;
-  bool completePrefix = false;
-  unsigned long startMicros = micros();
-  do {
+  unsigned long lastByteMicros = micros();
+  while (true) {
+    const unsigned long now = micros();
+    const unsigned long idleMicros = now - lastByteMicros;
+
+    // Check for T3.5 before looking at the receive queue. If this call kept up
+    // with the wire, a newly queued byte after that gap belongs to the next ADU.
+    if (len > 0 && idleMicros >= _frameTimeout) {
+      adu.setRtuLen(len);
+      if (!adu.crcGood()) {
+        adu.setRtuLen(0);
+        return MODBUS_RTU_COMM_CRC_ERROR;
+      }
+      return MODBUS_RTU_COMM_SUCCESS;
+    }
+
     if (_serial.available()) {
-      startMicros = micros();
-      adu.rtu[len] = _serial.read();
+      // A newly observed byte between T1.5 and T3.5 invalidates the complete
+      // RTU frame. Consume that byte before entering persistent drain mode so
+      // it cannot later be mistaken for the start of a fresh frame.
+      if (len > 0 && idleMicros > _charTimeout) {
+        const int value = _serial.read();
+        if (value >= 0) lastByteMicros = micros();
+        beginDiscard(lastByteMicros);
+        drainUntilIdle();
+        adu.setRtuLen(0);
+        return MODBUS_RTU_COMM_FRAME_ERROR;
+      }
+
+      if (len >= 256U) {
+        beginDiscard(lastByteMicros);
+        drainUntilIdle();
+        adu.setRtuLen(0);
+        return MODBUS_RTU_COMM_FRAME_ERROR;
+      }
+
+      const int value = _serial.read();
+      if (value < 0) continue;
+      adu.rtu[len] = value;
       len++;
-      const uint16_t expected = expectedLength ? expectedLength(adu.rtu, len) : 0;
-      if (expected != 0 && expected == len) {
+      lastByteMicros = micros();
+
+      // Candidate parsing is a fallback only when more bytes are already
+      // queued. A normally serviced frame therefore needs only its T3.5 gap,
+      // and a live byte arriving before T3.5 is not split from its prefix.
+      if (_serial.available() && len >= 4U &&
+          ((frameCandidate && frameCandidate(adu.rtu, len)) ||
+           (additionalFrameCandidate &&
+            additionalFrameCandidate(adu.rtu, len)))) {
         adu.setRtuLen(len);
-        completePrefix = adu.crcGood();
+        if (adu.crcGood()) {
+          usedBufferedCandidate = true;
+          return MODBUS_RTU_COMM_SUCCESS;
+        }
+        adu.setRtuLen(0);
       }
     }
-  } while (!completePrefix && micros() - startMicros <= _charTimeout && len < 256);
-  adu.setRtuLen(len);
-  // A final frame still observes T3.5 before a possible response. If another
-  // byte is already queued after a CRC-valid expected-length prefix, its wire
-  // timing is no longer observable and waiting here only delays the next read.
-  while (micros() - startMicros < _frameTimeout &&
-         (!completePrefix || !_serial.available()));
-  if (!completePrefix && _serial.available()) {
-    adu.setRtuLen(0);
-    return MODBUS_RTU_COMM_FRAME_ERROR;
   }
-  if (!adu.crcGood()) {
-    adu.setRtuLen(0);
-    return MODBUS_RTU_COMM_CRC_ERROR;
-  }
-  return MODBUS_RTU_COMM_SUCCESS;
 }
 
 bool ModbusRTUComm::writeAdu(ModbusADU& adu) {
